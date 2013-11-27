@@ -57,7 +57,7 @@ class zio(object):
     IO_PROCESS = 'process'
 
     # TODO: logfile support ?
-    def __init__(self, target, print_read = True, print_write = True, print_log = True, timeout = 30, cwd = None, env = None, ignore_sighup = True):
+    def __init__(self, target, print_read = True, print_write = True, print_log = True, timeout = 30, cwd = None, env = None, ignore_sighup = True, write_delay = 0.05):
         """
         zio is an easy-to-use io library for your target, currently zio supports process io and tcp socket
 
@@ -83,9 +83,10 @@ class zio(object):
 
         self.timeout = timeout
         self.write_fd = -1          # the fd to write to, no matter subprocess or socket
+        self.read_fd = -1           # the fd to read from, no matter subprocess or socket
         self.exit_status = None     # subprocess exit status, for socket, should be 0 if closed normally, or others if exception occurred
         
-        self.write_delay = 0.05     # the delay before writing data, pexcept said Linux don't like this to be below 30ms
+        self.write_delay = write_delay     # the delay before writing data, pexcept said Linux don't like this to be below 30ms
         self.close_delay = 0.1      # like pexcept, will used by close(), to give kernel time to update process status, time in seconds
         self.terminate_delay = 0.1  # like close_delay
         self.cwd = cwd
@@ -125,30 +126,65 @@ class zio(object):
         assert self.pid is None, 'pid must be None, to prevent double spawn'
         assert self.command is not None, 'The command to be spawn must not be None'
 
+        master_fd, slave_fd = pty.openpty()
+        if master_fd < 0 or slave_fd < 0:
+            raise Exception('Could not openpty')
+
+        p2cread, p2cwrite = self.pipe_cloexec()
+
+        gc_enabled = gc.isenabled()
+        # Disable gc to avoid bug where gc -> file_dealloc ->
+        # write to stderr -> hang.  http://bugs.python.org/issue1336
+        gc.disable()
         try:
-            self.pid, self.write_fd = pty.fork()
-        except OSError:
-            err = sys.exc_info()[1]
-            raise Exception('pty.fork() failed: ' + str(err))
+            self.pid = os.fork()
+        except:
+            if gc_enabled:
+                gc.enable()
+            raise
 
-        # if self.print_log: log('self.pid = %d, child_fd = %d' % (self.pid, self.write_fd))
+        if self.pid < 0:
+            raise Exception('failed to fork')
+        elif self.pid == 0:
+            # Child
+            os.close(master_fd)
+            self.__pty_make_controlling_tty(slave_fd)
 
-        if self.pid == 0:   # Child
             try:
+                # used by setwinsize
                 self.write_fd = sys.stdout.fileno()
                 self.setwinsize(24, 80)     # note that this may not be successful
             except BaseException, ex:
                 if self.print_log: log('[ WARN ] setwinsize exception: %s' % (str(ex)), 'yellow')
                 pass
 
+            # redirect stdout and stderr to pty
+            # but don't redirect stdin, because it will get echoed back, which is not what we want
+
+            os.dup2(slave_fd, pty.STDOUT_FILENO)
+            os.dup2(slave_fd, pty.STDERR_FILENO)
+
+            if slave_fd > 2:
+                os.close(slave_fd)
+
+            if p2cwrite is not None:
+                os.close(p2cwrite)
+
+            # Dup fds for child
+            def _dup2(a, b):
+                # dup2() removes the CLOEXEC flag but
+                # we must do it ourselves if dup2()
+                # would be a no-op (issue #10806).
+                if a == b:
+                    self._set_cloexec_flag(a, False)
+                elif a is not None:
+                    os.dup2(a, b)
+            _dup2(p2cread, pty.STDIN_FILENO)
+
             # do not allow child to inherit open file descriptors from parent
 
             max_fd = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
-            for i in range(3, max_fd):
-                try:
-                    os.close(i)
-                except OSError:     # this error does not matter, we just try out all possible fds
-                    pass
+            os.closerange(3, max_fd)
 
             if self.ignore_sighup:
                 signal.signal(signal.SIGHUP, signal.SIG_IGN)
@@ -162,10 +198,91 @@ class zio(object):
                 os.execv(self.command, self.args)
             else:
                 os.execvpe(self.command, self.args, self.env)
+            
+            # TODO: add subprocess errpipe to detech child error
+            # child exit here, the same as subprocess module do
+            os._exit(255)
+
+        else:
+            # after fork, parent
+            self.write_fd = p2cwrite
+            self.read_fd = master_fd
+            os.close(slave_fd)
+            if gc_enabled:
+                gc.enable()
 
         # parent goes here
         self.terminated = False
         self.closed = False
+
+    def __pty_make_controlling_tty(self, tty_fd):
+        '''This makes the pseudo-terminal the controlling tty. This should be
+        more portable than the pty.fork() function. Specifically, this should
+        work on Solaris. '''
+
+        child_name = os.ttyname(tty_fd)
+
+        # Disconnect from controlling tty. Harmless if not already connected.
+        try:
+            fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+            if fd >= 0:
+                os.close(fd)
+        # which exception, shouldnt' we catch explicitly .. ?
+        except:
+            # Already disconnected. This happens if running inside cron.
+            pass
+
+        os.setsid()
+
+        # Verify we are disconnected from controlling tty
+        # by attempting to open it again.
+        try:
+            fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+            if fd >= 0:
+                os.close(fd)
+                raise ExceptionPexpect('Failed to disconnect from ' +
+                    'controlling tty. It is still possible to open /dev/tty.')
+        # which exception, shouldnt' we catch explicitly .. ?
+        except:
+            # Good! We are disconnected from a controlling tty.
+            pass
+
+        # Verify we can open child pty.
+        fd = os.open(child_name, os.O_RDWR)
+        if fd < 0:
+            raise ExceptionPexpect("Could not open child pty, " + child_name)
+        else:
+            os.close(fd)
+
+        # Verify we now have a controlling tty.
+        fd = os.open("/dev/tty", os.O_WRONLY)
+        if fd < 0:
+            raise ExceptionPexpect("Could not open controlling tty, /dev/tty")
+        else:
+            os.close(fd)
+
+    def _set_cloexec_flag(self, fd, cloexec=True):
+        try:
+            cloexec_flag = fcntl.FD_CLOEXEC
+        except AttributeError:
+            cloexec_flag = 1
+
+        old = fcntl.fcntl(fd, fcntl.F_GETFD)
+        if cloexec:
+            fcntl.fcntl(fd, fcntl.F_SETFD, old | cloexec_flag)
+        else:
+            fcntl.fcntl(fd, fcntl.F_SETFD, old & ~cloexec_flag)
+
+    def pipe_cloexec(self):
+        """Create a pipe with FDs set CLOEXEC."""
+        # Pipes' FDs are set CLOEXEC by default because we don't want them
+        # to be inherited by other subprocesses: the CLOEXEC flag is removed
+        # from the child's FDs by _dup2(), between fork() and exec().
+        # This is not atomic: we would need the pipe2() syscall for that.
+        r, w = os.pipe()
+        self._set_cloexec_flag(r)
+        self._set_cloexec_flag(w)
+        return r, w
 
     def fileno(self):
         '''This returns the file descriptor of the pty for the child.
@@ -392,10 +509,10 @@ class zio(object):
         tty.setraw(pty.STDIN_FILENO)
         try:
             while self.isalive():
-                r, w, e = self.__select([self.write_fd, pty.STDIN_FILENO], [], [])
-                if self.write_fd in r:
+                r, w, e = self.__select([self.read_fd, pty.STDIN_FILENO], [], [])
+                if self.read_fd in r:
                     try:
-                        data = os.read(self.write_fd, 1024)
+                        data = os.read(self.read_fd, 1024)
                     except OSError, e:
                         if e.errno != errno.EIO:
                             raise
@@ -626,8 +743,8 @@ def split_command_line(command_line):       # this piece of code comes from pexc
     return arg_list
 
 if __name__ == '__main__':
-    io = zio('cat')
-    for i in range(10):
-        io.write(str(i) * 10 + '\n')
+    io = zio('vim', write_delay = 0)
+    #for i in range(10):
+    #    io.write(str(i) * 10 + '\n')
     #io.read(4)
     io.interact()
