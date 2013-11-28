@@ -130,6 +130,9 @@ class zio(object):
         if master_fd < 0 or slave_fd < 0:
             raise Exception('Could not openpty')
 
+        # we use pipe for stdin because we don't want our input to be echoed back in stdout
+        # set echo off does not help because in application like ssh, when you input the password
+        # echo will be switched on again
         p2cread, p2cwrite = self.pipe_cloexec()
 
         gc_enabled = gc.isenabled()
@@ -151,9 +154,7 @@ class zio(object):
             self.__pty_make_controlling_tty(slave_fd)
 
             try:
-                # used by setwinsize
-                self.write_fd = sys.stdout.fileno()
-                self.setwinsize(24, 80)     # note that this may not be successful
+                self.setwinsize(sys.stdout.fileno(), 24, 80)     # note that this may not be successful
             except BaseException, ex:
                 if self.print_log: log('[ WARN ] setwinsize exception: %s' % (str(ex)), 'yellow')
                 pass
@@ -287,9 +288,9 @@ class zio(object):
     def fileno(self):
         '''This returns the file descriptor of the pty for the child.
         '''
-        return self.write_fd
+        return self.read_fd
 
-    def setwinsize(self, rows, cols):   # from pexpect, thanks!
+    def setwinsize(self, fd, rows, cols):   # from pexpect, thanks!
 
         '''This sets the terminal window size of the child tty. This will cause
         a SIGWINCH signal to be sent to the child. This does not change the
@@ -311,7 +312,7 @@ class zio(object):
             TIOCSWINSZ = -2146929561
         # Note, assume ws_xpixel and ws_ypixel are zero.
         s = struct.pack('HHHH', rows, cols, 0, 0)
-        fcntl.ioctl(self.fileno(), TIOCSWINSZ, s)
+        fcntl.ioctl(fd, TIOCSWINSZ, s)
 
     def getwinsize(self):
 
@@ -327,7 +328,8 @@ class zio(object):
         ret = ['io-type: %s' % self.io_type(), 
                'name: %s' % self.name, 
                'timeout: %f' % self.timeout,
-               'write-fd: %d' % self.write_fd]
+               'write-fd: %d' % self.write_fd,
+               'read-fd: %d' % self.read_fd]
         if self.io_type() == zio.IO_SOCKET:
             pass
         elif self.io_type() == zio.IO_PROCESS:
@@ -504,7 +506,11 @@ class zio(object):
                     'job control with our child pid?')
         return False
 
-    def interact(self, escape_character=chr(29), input_filter = None, output_filter = None):
+    def interact(self, escape_character=chr(29), input_filter = lambda x: x.replace('\x7f', '\x08'), output_filter = None):
+        """
+        when stdin is passed using os.pipe, backspace key will not work as expected, 
+        when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so I choose to translate 0x7f to ^H by default
+        """
         mode = tty.tcgetattr(pty.STDIN_FILENO)
         tty.setraw(pty.STDIN_FILENO)
         try:
@@ -539,6 +545,70 @@ class zio(object):
         just keep to be a file-like object
         """
         pass
+
+    def isatty(self):
+        '''This returns True if the file descriptor is open and connected to a
+        tty(-like) device, else False. '''
+
+        return os.isatty(self.child_fd)
+
+    def waitnoecho(self, timeout=-1):
+        '''This waits until the terminal ECHO flag is set False. This returns
+        True if the echo mode is off. This returns False if the ECHO flag was
+        not set False before the timeout. This can be used to detect when the
+        child is waiting for a password. Usually a child application will turn
+        off echo mode when it is waiting for the user to enter a password. For
+        example, instead of expecting the "password:" prompt you can wait for
+        the child to set ECHO off::
+
+            p = pexpect.spawn('ssh user@example.com')
+            p.waitnoecho()
+            p.sendline(mypassword)
+
+        If timeout==-1 then this method will use the value in self.timeout.
+        If timeout==None then this method to block until ECHO flag is False.
+        '''
+
+        if timeout == -1:
+            timeout = self.timeout
+        if timeout is not None:
+            end_time = time.time() + timeout
+        while True:
+            if not self.getecho():
+                return True
+            if timeout < 0 and timeout is not None:
+                return False
+            if timeout is not None:
+                timeout = end_time - time.time()
+            time.sleep(0.1)
+
+    def getecho(self):
+        '''This returns the terminal echo mode. This returns True if echo is
+        on or False if echo is off. Child applications that are expecting you
+        to enter a password often set ECHO False. See waitnoecho(). '''
+
+        attr = termios.tcgetattr(self.child_fd)
+        if attr[3] & termios.ECHO:
+            return True
+        return False
+
+    def setecho(self, state):
+
+        attr = termios.tcgetattr(self.read_fd)
+        if state:
+            attr[3] = attr[3] | termios.ECHO
+        else:
+            attr[3] = attr[3] & ~termios.ECHO
+        # I tried TCSADRAIN and TCSAFLUSH, but
+        # these were inconsistent and blocked on some platforms.
+        # TCSADRAIN would probably be ideal if it worked.
+        termios.tcsetattr(self.child_fd, termios.TCSANOW, attr)
+
+    def seterase(self, fd, erase_char = chr(0x7f)):
+        child_fd = fd
+        attr = termios.tcgetattr(child_fd)
+        attr[6][termios.VERASE] = erase_char
+        termios.tcsetattr(child_fd, termios.TCSANOW, attr)
 
     def io_type(self):
         
