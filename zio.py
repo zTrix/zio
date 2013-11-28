@@ -524,24 +524,31 @@ class zio(object):
                 r, w, e = self.__select([self.read_fd, pty.STDIN_FILENO], [], [])
                 if self.read_fd in r:
                     try:
+                        data = None
                         data = os.read(self.read_fd, 1024)
                     except OSError, e:
                         if e.errno != errno.EIO:
                             raise
-                    if output_filter: data = output_filter(data)
-                    os.write(pty.STDOUT_FILENO, data)
+                    if data is not None:
+                        if output_filter: data = output_filter(data)
+                        os.write(pty.STDOUT_FILENO, data)
                 if pty.STDIN_FILENO in r:
-                    data = os.read(pty.STDIN_FILENO, 1024)
-                    if input_filter:
-                        data = input_filter(data)
-                    i = data.rfind(escape_character)
-                    if i != -1:
-                        data = data[:i]
-                    while data != b'' and self.isalive():
-                        n = os.write(self.write_fd, data)
-                        data = data[n:]
-                    if i != -1:
-                        break
+                    try:
+                        data = None
+                        data = os.read(pty.STDIN_FILENO, 1024)
+                    except OSError, e:
+                        # the subprocess may have closed before we get to reading it
+                        if e.errno != errno.EIO:
+                            raise
+                    if data is not None:
+                        if input_filter: data = input_filter(data)
+                        i = data.rfind(escape_character)
+                        if i != -1: data = data[:i]
+                        while data != b'' and self.isalive():
+                            n = os.write(self.write_fd, data)
+                            data = data[n:]
+                        if i != -1:
+                            break
 
         finally:
             tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, mode)
@@ -819,7 +826,7 @@ def split_command_line(command_line):       # this piece of code comes from pexc
     return arg_list
 
 if __name__ == '__main__':
-    # io = zio('ssh lab.zwldl.com', write_delay = 0)
+    # io = zio('vim', write_delay = 0)
     io = zio('tty')
     #for i in range(10):
     #    io.write(str(i) * 10 + '\n')
