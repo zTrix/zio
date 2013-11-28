@@ -549,7 +549,22 @@ class zio(object):
                             data = data[n:]
                         if i != -1:
                             break
-
+            while True:
+                r, w, e = self.__select([self.read_fd], [], [], timeout = self.close_delay)
+                if self.read_fd in r:
+                    try:
+                        data = None
+                        data = os.read(self.read_fd, 1024)
+                    except OSError, e:
+                        if e.errno != errno.EIO:
+                            raise
+                    if data is not None:
+                        if output_filter: data = output_filter(data)
+                        os.write(pty.STDOUT_FILENO, data)
+                    else:
+                        break
+                else:
+                    break
         finally:
             tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, mode)
 
@@ -826,10 +841,15 @@ def split_command_line(command_line):       # this piece of code comes from pexc
     return arg_list
 
 if __name__ == '__main__':
-    # io = zio('vim', write_delay = 0)
-    io = zio('tty')
-    #for i in range(10):
-    #    io.write(str(i) * 10 + '\n')
-    #io.read(4)
-    io.interact()
+    test = '1'
+    if len(sys.argv) >= 2:
+        test = sys.argv[1]
+
+    if test == '1':
+        io = zio('tty')
+        io.interact()
+    elif test == '2':
+        io = zio('vim', write_delay = 0)
+        io.interact()
+        
 
