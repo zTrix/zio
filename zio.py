@@ -521,7 +521,18 @@ class zio(object):
         tty.setraw(pty.STDIN_FILENO)
         try:
             while self.isalive():
-                r, w, e = self.__select([self.read_fd, pty.STDIN_FILENO], [], [])
+                # write_fd for tty echo
+                r, w, e = self.__select([self.read_fd, pty.STDIN_FILENO, self.write_fd], [], [])
+                if self.write_fd in r:          # handle tty echo first
+                    try:
+                        data = None
+                        data = os.read(self.write_fd, 1024)
+                    except OSError, e:
+                        if e.errno != errno.EIO:
+                            raise
+                    if data is not None:
+                        if output_filter: data = output_filter(data)
+                        os.write(pty.STDOUT_FILENO, data)
                 if self.read_fd in r:
                     try:
                         data = None
@@ -841,15 +852,21 @@ def split_command_line(command_line):       # this piece of code comes from pexc
     return arg_list
 
 if __name__ == '__main__':
-    test = '1'
+
+    test = 'tty'
     if len(sys.argv) >= 2:
         test = sys.argv[1]
 
-    if test == '1':
+    if test == 'tty':
         io = zio('tty')
         io.interact()
-    elif test == '2':
+    elif test == 'vim':
         io = zio('vim', write_delay = 0)
         io.interact()
-        
+    elif test == 'cat':
+        io = zio('cat')
+        io.interact()
+    elif test == 'ssh':
+        io = zio('ssh root@127.0.0.1')
+        io.interact()
 
