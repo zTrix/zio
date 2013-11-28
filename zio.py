@@ -128,12 +128,16 @@ class zio(object):
 
         master_fd, slave_fd = pty.openpty()
         if master_fd < 0 or slave_fd < 0:
-            raise Exception('Could not openpty')
+            raise Exception('Could not openpty for stdout/stderr')
 
-        # we use pipe for stdin because we don't want our input to be echoed back in stdout
+        # use another pty for stdin because we don't want our input to be echoed back in stdout
         # set echo off does not help because in application like ssh, when you input the password
         # echo will be switched on again
-        p2cread, p2cwrite = self.pipe_cloexec()
+        # and dont use os.pipe either, because many thing weired will happen, such as baskspace not working, ssh lftp command hang
+
+        p2cwrite, p2cread = pty.openpty() # p2cread, p2cwrite = self.pipe_cloexec()
+        if p2cwrite < 0 or p2cread < 0:
+            raise Exception('Could not openpty for stdin')
 
         gc_enabled = gc.isenabled()
         # Disable gc to avoid bug where gc -> file_dealloc ->
@@ -151,10 +155,13 @@ class zio(object):
         elif self.pid == 0:
             # Child
             os.close(master_fd)
-            self.__pty_make_controlling_tty(slave_fd)
+
+            self.__pty_make_controlling_tty(p2cread)
+            # self.__pty_make_controlling_tty(slave_fd)
 
             try:
-                self.setwinsize(sys.stdout.fileno(), 24, 80)     # note that this may not be successful
+                # self.setwinsize(sys.stdout.fileno(), 24, 80)     # note that this may not be successful
+                pass
             except BaseException, ex:
                 if self.print_log: log('[ WARN ] setwinsize exception: %s' % (str(ex)), 'yellow')
                 pass
@@ -193,8 +200,6 @@ class zio(object):
             if self.cwd is not None:
                 os.chdir(self.cwd)
 
-            # Child will end here
-
             if self.env is None:
                 os.execv(self.command, self.args)
             else:
@@ -207,6 +212,7 @@ class zio(object):
         else:
             # after fork, parent
             self.write_fd = p2cwrite
+            os.close(p2cread)
             self.read_fd = master_fd
             os.close(slave_fd)
             if gc_enabled:
@@ -241,7 +247,7 @@ class zio(object):
             fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
             if fd >= 0:
                 os.close(fd)
-                raise ExceptionPexpect('Failed to disconnect from ' +
+                raise Exception('Failed to disconnect from ' +
                     'controlling tty. It is still possible to open /dev/tty.')
         # which exception, shouldnt' we catch explicitly .. ?
         except:
@@ -251,14 +257,14 @@ class zio(object):
         # Verify we can open child pty.
         fd = os.open(child_name, os.O_RDWR)
         if fd < 0:
-            raise ExceptionPexpect("Could not open child pty, " + child_name)
+            raise Exception("Could not open child pty, " + child_name)
         else:
             os.close(fd)
 
         # Verify we now have a controlling tty.
         fd = os.open("/dev/tty", os.O_WRONLY)
         if fd < 0:
-            raise ExceptionPexpect("Could not open controlling tty, /dev/tty")
+            raise Exception("Could not open controlling tty, /dev/tty")
         else:
             os.close(fd)
 
@@ -506,10 +512,10 @@ class zio(object):
                     'job control with our child pid?')
         return False
 
-    def interact(self, escape_character=chr(29), input_filter = lambda x: x.replace('\x7f', '\x08'), output_filter = None):
+    def interact(self, escape_character=chr(29), input_filter = None, output_filter = None):
         """
         when stdin is passed using os.pipe, backspace key will not work as expected, 
-        when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so I choose to translate 0x7f to ^H by default
+        if write_fd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so I choose to translate 0x7f to ^H by default, by setting input_filter = lambda x: x.replace('\x7f', '\x08')
         """
         mode = tty.tcgetattr(pty.STDIN_FILENO)
         tty.setraw(pty.STDIN_FILENO)
@@ -813,8 +819,10 @@ def split_command_line(command_line):       # this piece of code comes from pexc
     return arg_list
 
 if __name__ == '__main__':
-    io = zio('vim', write_delay = 0)
+    # io = zio('ssh lab.zwldl.com', write_delay = 0)
+    io = zio('tty')
     #for i in range(10):
     #    io.write(str(i) * 10 + '\n')
     #io.read(4)
     io.interact()
+
