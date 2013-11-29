@@ -521,9 +521,22 @@ class zio(object):
         when stdin is passed using os.pipe, backspace key will not work as expected, 
         if write_fd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so I choose to translate 0x7f to ^H by default, by setting input_filter = lambda x: x.replace('\x7f', '\x08')
         """
+        stdout(self.buffer)
+        self.buffer = str()
         mode = tty.tcgetattr(pty.STDIN_FILENO)
         tty.setraw(pty.STDIN_FILENO)
         try:
+            # first release all echo back, because we have already printed them out when writing
+            while self.isalive():
+                r, w, e = self.__select([self.write_fd], [], [], timeout = 0.1)
+                if self.write_fd in r:
+                    try:
+                        os.read(self.write_fd, 1024)
+                    except OSError, e:
+                        pass
+                else:
+                    break
+                
             while self.isalive():
                 # write_fd for tty echo
                 r, w, e = self.__select([self.read_fd, pty.STDIN_FILENO, self.write_fd], [], [])
@@ -1035,6 +1048,7 @@ class zio(object):
         if self.read_fd in r:
             try:
                 s = os.read(self.read_fd, size)
+                if self.print_read: stdout(s)
             except OSError:
                 # Linux does this
                 self.flag_eof = True
