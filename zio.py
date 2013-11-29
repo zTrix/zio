@@ -57,7 +57,7 @@ class zio(object):
     IO_PROCESS = 'process'
 
     # TODO: logfile support ?
-    def __init__(self, target, print_read = True, print_write = True, print_log = True, timeout = 30, cwd = None, env = None, ignore_sighup = True, write_delay = 0.05):
+    def __init__(self, target, print_read = True, print_write = True, print_log = True, timeout = 10, cwd = None, env = None, ignore_sighup = True, write_delay = 0.05, ignorecase = False):
         """
         zio is an easy-to-use io library for your target, currently zio supports process io and tcp socket
 
@@ -96,6 +96,10 @@ class zio(object):
         self.flag_eof = False
         self.closed = True
         self.terminated = True
+
+        self.ignorecase = ignorecase
+
+        self.buffer = str()
 
         if self.io_type() == 'socket':
             #TODO: udp support ?
@@ -414,7 +418,7 @@ class zio(object):
         if self.isalive():
             pid, status = os.waitpid(self.pid, 0)
         else:
-            raise ExceptionPexpect('Cannot wait for dead child process.')
+            raise Exception('Cannot wait for dead child process.')
         self.exitstatus = os.WEXITSTATUS(status)
         if os.WIFEXITED(status):
             self.status = status
@@ -428,7 +432,7 @@ class zio(object):
             self.terminated = True
         elif os.WIFSTOPPED(status):
             # You can't call wait() on a child process in the stopped state.
-            raise ExceptionPexpect('Called wait() on a stopped child ' +
+            raise Exception('Called wait() on a stopped child ' +
                     'process. This is not supported. Is some other ' +
                     'process attempting job control with our child pid?')
         return self.exitstatus
@@ -589,7 +593,7 @@ class zio(object):
         '''This returns True if the file descriptor is open and connected to a
         tty(-like) device, else False. '''
 
-        return os.isatty(self.child_fd)
+        return os.isatty(self.read_fd)
 
     def waitnoecho(self, timeout=-1):
         '''This waits until the terminal ECHO flag is set False. This returns
@@ -621,17 +625,17 @@ class zio(object):
                 timeout = end_time - time.time()
             time.sleep(0.1)
 
-    def getecho(self):
+    def getecho(self, fd):
         '''This returns the terminal echo mode. This returns True if echo is
         on or False if echo is off. Child applications that are expecting you
         to enter a password often set ECHO False. See waitnoecho(). '''
 
-        attr = termios.tcgetattr(self.child_fd)
+        attr = termios.tcgetattr(self.fd)
         if attr[3] & termios.ECHO:
             return True
         return False
 
-    def setecho(self, state):
+    def setecho(self, fd, state):
 
         attr = termios.tcgetattr(self.read_fd)
         if state:
@@ -641,13 +645,12 @@ class zio(object):
         # I tried TCSADRAIN and TCSAFLUSH, but
         # these were inconsistent and blocked on some platforms.
         # TCSADRAIN would probably be ideal if it worked.
-        termios.tcsetattr(self.child_fd, termios.TCSANOW, attr)
+        termios.tcsetattr(self.fd, termios.TCSANOW, attr)
 
     def seterase(self, fd, erase_char = chr(0x7f)):
-        child_fd = fd
-        attr = termios.tcgetattr(child_fd)
+        attr = termios.tcgetattr(fd)
         attr[6][termios.VERASE] = erase_char
-        termios.tcsetattr(child_fd, termios.TCSANOW, attr)
+        termios.tcsetattr(fd, termios.TCSANOW, attr)
 
     def io_type(self):
         
@@ -699,12 +702,24 @@ class zio(object):
     def _not_impl(self):
         raise NotImplementedError("Not Implemented")
 
+    def writelines(self, sequence):
+        n = 0
+        for s in sequence:
+            n += self.writeline(s)
+        return n
+
+    def writeline(self, s = ''):
+        n = self.write(s)
+        n += self.write(os.linesep)
+        return n
+
     def write(self, s):
         if self.io_type() == zio.IO_SOCKET:
             #self.lock.acquire()
             if self.print_write: stdout(s)
             self.sock.sendall(s)
             #self.lock.release()
+            return len(s)
         elif self.io_type() == zio.IO_PROCESS:
             #if not self.writable(): raise Exception('subprocess stdin not writable')
             #self.lock.acquire()
@@ -713,23 +728,65 @@ class zio(object):
             if not isinstance(s, bytes): s = s.encode('utf-8')
 
             if self.print_write: stdout(s)
-            os.write(self.write_fd, s)
+            return os.write(self.write_fd, s)
 
             #self.lock.release()
 
     def writeeof(self):
         if hasattr(termios, 'VEOF'):
-            char = ord(termios.tcgetattr(self.child_fd)[6][termios.VEOF])
+            char = ord(termios.tcgetattr(self.write_fd)[6][termios.VEOF])
         else:
             # platform does not define VEOF so assume CTRL-D
             char = 4
         self.write(chr(char))
 
-    def close(self):
+    write_eof = writeeof
+
+    def writecontrol(self, char):
+
+        '''Helper method that wraps send() with mnemonic access for sending control
+        character to the child (such as Ctrl-C or Ctrl-D).  For example, to send
+        Ctrl-G (ASCII 7, bell, '\a')::
+
+            child.sendcontrol('g')
+
+        See also, sendintr() and sendeof().
+        '''
+
+        char = char.lower()
+        a = ord(char)
+        if a >= 97 and a <= 122:
+            a = a - ord('a') + 1
+            return self.write(chr(a))
+        d = {'@': 0, '`': 0,
+            '[': 27, '{': 27,
+            '\\': 28, '|': 28,
+            ']': 29, '}': 29,
+            '^': 30, '~': 30,
+            '_': 31,
+            '?': 127}
+        if char not in d:
+            return 0
+        return self.write(chr(d[char]))
+
+
+    def close(self, force = True):
         if self.io_type() == 'socket':
             self.lock.acquire()
             self.sock.close()
             self.lock.release()
+        else:
+            if not self.closed:
+                self.flush()
+                os.close(self.write_fd)
+                os.close(self.read_fd)
+                time.sleep(self.close_delay)
+                if self.isalive():
+                    if not self.terminate(force):
+                        raise Exception('Could not terminate child process')
+                self.read_fd = -1
+                self.write_fd = -1
+                self.closed = True
 
     def _read(self, size):
         if self.io_type() == 'socket':
@@ -740,35 +797,456 @@ class zio(object):
             return self.proc.output.read(size)
 
     def read(self, size = None):
-        if size is None:    # read to end
-            size = float('inf')
-        rd = 0
-        ret = StringIO()
-        while rd < size:
-            bufsize = size - rd < 4096 and size - rd or 4096
-            buf = self._read(bufsize)
-            if not buf: break
-            if self.print_read: stdout(buf)
-            ret.write(buf)
-        return ret.getvalue()
-
-    def read_until(self, s):
-        # TODO: support regex, function
+        if size == 0:
+            return str()
+        elif size < 0 or size is None:
+            self.read_loop(searcher_re(self.compile_pattern_list(EOF)))
+            return self.before
         
-        ret = StringIO()
-        while True:
-            char = self._read(1)
-            if not char: break
-            if self.print_read: stdout(char)
-            ret.write(buf)
-            if ret.getvalue().find(s) > -1: break
+        cre = re.compile('.{%d}' % size, re.DOTALL)
+        index = self.read_loop(searcher_re(self.compile_pattern_list([cre, EOF])))
+        if index == 0:
+            assert self.before == ''
+            return self.after
+        return self.before
 
-        return ret.getvalue()
+    def readline(self, size = -1):
+        if size == 0:
+            return str()
+        index = self.read_loop(searcher_re(self.compile_pattern_list([b'\r\n', EOF])))
+        if index == 0:
+            return self.before + b'\n'
+        else:
+            return self.before
+
+    def readlines(self, sizehint = -1):
+        lines = []
+        while True:
+            line = self.readline()
+            if not line:
+                break
+            lines.append(line)
+        return lines
+
+    def read_until(self, pattern_list, timeout = -1, searchwindowsize = -1):
+        if (isinstance(pattern_list, basestring) or
+                pattern_list in (TIMEOUT, EOF)):
+            pattern_list = [pattern_list]
+
+        def prepare_pattern(pattern):
+            if pattern in (TIMEOUT, EOF):
+                return pattern
+            if isinstance(pattern, basestring):
+                return pattern
+            self._pattern_type_err(pattern)
+
+        try:
+            pattern_list = iter(pattern_list)
+        except TypeError:
+            self._pattern_type_err(pattern_list)
+        pattern_list = [prepare_pattern(p) for p in pattern_list]
+        return self.read_loop(searcher_string(pattern_list),
+                timeout, searchwindowsize)
+
+
+    def read_loop(self, searcher, timeout=-1, searchwindowsize = None):
+
+        '''This is the common loop used inside expect. The 'searcher' should be
+        an instance of searcher_re or searcher_string, which describes how and
+        what to search for in the input.
+
+        See expect() for other arguments, return value and exceptions. '''
+
+        self.searcher = searcher
+
+        if timeout == -1:
+            timeout = self.timeout
+        if timeout is not None:
+            end_time = time.time() + timeout
+
+        try:
+            incoming = self.buffer
+            freshlen = len(incoming)
+            while True:
+                # Keep reading until exception or return.
+                index = searcher.search(incoming, freshlen, searchwindowsize)
+                if index >= 0:
+                    self.buffer = incoming[searcher.end:]
+                    self.before = incoming[: searcher.start]
+                    self.after = incoming[searcher.start: searcher.end]
+                    self.match = searcher.match
+                    self.match_index = index
+                    return self.match_index
+                # No match at this point
+                if (timeout is not None) and (timeout < 0):
+                    raise TIMEOUT('Timeout exceeded in expect_any().')
+                # Still have time left, so read more data
+                c = self.read_nonblocking(2048, timeout)
+                freshlen = len(c)
+                time.sleep(0.0001)
+                incoming = incoming + c
+                if timeout is not None:
+                    timeout = end_time - time.time()
+        except EOF:
+            err = sys.exc_info()[1]
+            self.buffer = str()
+            self.before = incoming
+            self.after = EOF
+            index = searcher.eof_index
+            if index >= 0:
+                self.match = EOF
+                self.match_index = index
+                return self.match_index
+            else:
+                self.match = None
+                self.match_index = None
+                raise EOF(str(err) + '\n' + str(self))
+        except TIMEOUT:
+            err = sys.exc_info()[1]
+            self.buffer = incoming
+            self.before = incoming
+            self.after = TIMEOUT
+            index = searcher.timeout_index
+            if index >= 0:
+                self.match = TIMEOUT
+                self.match_index = index
+                return self.match_index
+            else:
+                self.match = None
+                self.match_index = None
+                raise TIMEOUT(str(err) + '\n' + str(self))
+        except:
+            self.before = incoming
+            self.after = None
+            self.match = None
+            self.match_index = None
+            raise
+
+    def _pattern_type_err(self, pattern):
+        raise TypeError('got {badtype} ({badobj!r}) as pattern, must be one'
+                        ' of: {goodtypes}, pexpect.EOF, pexpect.TIMEOUT'\
+                        .format(badtype=type(pattern),
+                                badobj=pattern,
+                                goodtypes=', '.join([str(ast)\
+                                    for ast in basestring])
+                                )
+                        )
+
+    def compile_pattern_list(self, patterns):
+
+        '''This compiles a pattern-string or a list of pattern-strings.
+        Patterns must be a StringType, EOF, TIMEOUT, SRE_Pattern, or a list of
+        those. Patterns may also be None which results in an empty list (you
+        might do this if waiting for an EOF or TIMEOUT condition without
+        expecting any pattern).
+
+        This is used by expect() when calling expect_list(). Thus expect() is
+        nothing more than::
+
+             cpl = self.compile_pattern_list(pl)
+             return self.expect_list(cpl, timeout)
+
+        If you are using expect() within a loop it may be more
+        efficient to compile the patterns first and then call expect_list().
+        This avoid calls in a loop to compile_pattern_list()::
+
+             cpl = self.compile_pattern_list(my_pattern)
+             while some_condition:
+                ...
+                i = self.expect_list(clp, timeout)
+                ...
+        '''
+
+        if patterns is None:
+            return []
+        if not isinstance(patterns, list):
+            patterns = [patterns]
+
+        # Allow dot to match \n
+        compile_flags = re.DOTALL
+        if self.ignorecase:
+            compile_flags = compile_flags | re.IGNORECASE
+        compiled_pattern_list = []
+        for idx, p in enumerate(patterns):
+            if isinstance(p, basestring):
+                compiled_pattern_list.append(re.compile(p, compile_flags))
+            elif p is EOF:
+                compiled_pattern_list.append(EOF)
+            elif p is TIMEOUT:
+                compiled_pattern_list.append(TIMEOUT)
+            elif isinstance(p, type(re.compile(''))):
+                compiled_pattern_list.append(p)
+            else:
+                self._pattern_type_err(p)
+        return compiled_pattern_list
+
+
+    def read_nonblocking(self, size=1, timeout=-1):
+        '''This reads at most size characters from the child application. It
+        includes a timeout. If the read does not complete within the timeout
+        period then a TIMEOUT exception is raised. If the end of file is read
+        then an EOF exception will be raised. If a log file was set using
+        setlog() then all data will also be written to the log file.
+
+        If timeout is None then the read may block indefinitely.
+        If timeout is -1 then the self.timeout value is used. If timeout is 0
+        then the child is polled and if there is no data immediately ready
+        then this will raise a TIMEOUT exception.
+
+        The timeout refers only to the amount of time to read at least one
+        character. This is not effected by the 'size' parameter, so if you call
+        read_nonblocking(size=100, timeout=30) and only one character is
+        available right away then one character will be returned immediately.
+        It will not wait for 30 seconds for another 99 characters to come in.
+
+        This is a wrapper around os.read(). It uses select.select() to
+        implement the timeout. '''
+
+        if self.closed:
+            raise ValueError('I/O operation on closed file.')
+
+        if timeout == -1:
+            timeout = self.timeout
+
+        # Note that some systems such as Solaris do not give an EOF when
+        # the child dies. In fact, you can still try to read
+        # from the child_fd -- it will block forever or until TIMEOUT.
+        # For this case, I test isalive() before doing any reading.
+        # If isalive() is false, then I pretend that this is the same as EOF.
+        if not self.isalive():
+            # timeout of 0 means "poll"
+            r, w, e = self.__select([self.read_fd], [], [], 0)
+            if not r:
+                self.flag_eof = True
+                raise EOF('End Of File (EOF). Braindead platform.')
+
+        r, w, e = self.__select([self.read_fd], [], [], timeout)
+
+        if not r:
+            if not self.isalive():
+                # Some platforms, such as Irix, will claim that their
+                # processes are alive; timeout on the select; and
+                # then finally admit that they are not alive.
+                self.flag_eof = True
+                raise EOF('End of File (EOF). Very slow platform.')
+            else:
+                raise TIMEOUT('Timeout exceeded.')
+
+        if self.read_fd in r:
+            try:
+                s = os.read(self.read_fd, size)
+            except OSError:
+                # Linux does this
+                self.flag_eof = True
+                raise EOF('End Of File (EOF). Exception style platform.')
+            if s == b'':
+                # BSD style
+                self.flag_eof = True
+                raise EOF('End Of File (EOF). Empty string style platform.')
+
+            return s
+
+        raise Exception('Reached an unexpected state.')
 
     # apis below
-    writeable = _not_impl
-    read = read_until = read_after = read_before = read_between = read_range = readline = read_line = readable = _not_impl
-    close = _not_impl
+    read_after = read_before = read_between = read_range = read_line = readable = _not_impl
+
+class searcher_string(object):
+
+    '''This is a plain string search helper for the spawn.expect_any() method.
+    This helper class is for speed. For more powerful regex patterns
+    see the helper class, searcher_re.
+
+    Attributes:
+
+        eof_index     - index of EOF, or -1
+        timeout_index - index of TIMEOUT, or -1
+
+    After a successful match by the search() method the following attributes
+    are available:
+
+        start - index into the buffer, first byte of match
+        end   - index into the buffer, first byte after match
+        match - the matching string itself
+
+    '''
+
+    def __init__(self, strings):
+
+        '''This creates an instance of searcher_string. This argument 'strings'
+        may be a list; a sequence of strings; or the EOF or TIMEOUT types. '''
+
+        self.eof_index = -1
+        self.timeout_index = -1
+        self._strings = []
+        for n, s in enumerate(strings):
+            if s is EOF:
+                self.eof_index = n
+                continue
+            if s is TIMEOUT:
+                self.timeout_index = n
+                continue
+            self._strings.append((n, s))
+
+    def __str__(self):
+
+        '''This returns a human-readable string that represents the state of
+        the object.'''
+
+        ss = [(ns[0], '    %d: "%s"' % ns) for ns in self._strings]
+        ss.append((-1, 'searcher_string:'))
+        if self.eof_index >= 0:
+            ss.append((self.eof_index, '    %d: EOF' % self.eof_index))
+        if self.timeout_index >= 0:
+            ss.append((self.timeout_index,
+                '    %d: TIMEOUT' % self.timeout_index))
+        ss.sort()
+        ss = list(zip(*ss))[1]
+        return '\n'.join(ss)
+
+    def search(self, buffer, freshlen, searchwindowsize=None):
+
+        '''This searches 'buffer' for the first occurence of one of the search
+        strings.  'freshlen' must indicate the number of bytes at the end of
+        'buffer' which have not been searched before. It helps to avoid
+        searching the same, possibly big, buffer over and over again.
+
+        See class spawn for the 'searchwindowsize' argument.
+
+        If there is a match this returns the index of that string, and sets
+        'start', 'end' and 'match'. Otherwise, this returns -1. '''
+
+        first_match = None
+
+        # 'freshlen' helps a lot here. Further optimizations could
+        # possibly include:
+        #
+        # using something like the Boyer-Moore Fast String Searching
+        # Algorithm; pre-compiling the search through a list of
+        # strings into something that can scan the input once to
+        # search for all N strings; realize that if we search for
+        # ['bar', 'baz'] and the input is '...foo' we need not bother
+        # rescanning until we've read three more bytes.
+        #
+        # Sadly, I don't know enough about this interesting topic. /grahn
+
+        for index, s in self._strings:
+            if searchwindowsize is None:
+                # the match, if any, can only be in the fresh data,
+                # or at the very end of the old data
+                offset = -(freshlen + len(s))
+            else:
+                # better obey searchwindowsize
+                offset = -searchwindowsize
+            n = buffer.find(s, offset)
+            if n >= 0 and (first_match is None or n < first_match):
+                first_match = n
+                best_index, best_match = index, s
+        if first_match is None:
+            return -1
+        self.match = best_match
+        self.start = first_match
+        self.end = self.start + len(self.match)
+        return best_index
+
+class searcher_re(object):
+
+    '''This is regular expression string search helper for the
+    spawn.expect_any() method. This helper class is for powerful
+    pattern matching. For speed, see the helper class, searcher_string.
+
+    Attributes:
+
+        eof_index     - index of EOF, or -1
+        timeout_index - index of TIMEOUT, or -1
+
+    After a successful match by the search() method the following attributes
+    are available:
+
+        start - index into the buffer, first byte of match
+        end   - index into the buffer, first byte after match
+        match - the re.match object returned by a succesful re.search
+
+    '''
+
+    def __init__(self, patterns):
+
+        '''This creates an instance that searches for 'patterns' Where
+        'patterns' may be a list or other sequence of compiled regular
+        expressions, or the EOF or TIMEOUT types.'''
+
+        self.eof_index = -1
+        self.timeout_index = -1
+        self._searches = []
+        for n, s in zip(list(range(len(patterns))), patterns):
+            if s is EOF:
+                self.eof_index = n
+                continue
+            if s is TIMEOUT:
+                self.timeout_index = n
+                continue
+            self._searches.append((n, s))
+
+    def __str__(self):
+
+        '''This returns a human-readable string that represents the state of
+        the object.'''
+
+        #ss = [(n, '    %d: re.compile("%s")' %
+        #    (n, repr(s.pattern))) for n, s in self._searches]
+        ss = list()
+        for n, s in self._searches:
+            try:
+                ss.append((n, '    %d: re.compile("%s")' % (n, s.pattern)))
+            except UnicodeEncodeError:
+                # for test cases that display __str__ of searches, dont throw
+                # another exception just because stdout is ascii-only, using
+                # repr()
+                ss.append((n, '    %d: re.compile(%r)' % (n, s.pattern)))
+        ss.append((-1, 'searcher_re:'))
+        if self.eof_index >= 0:
+            ss.append((self.eof_index, '    %d: EOF' % self.eof_index))
+        if self.timeout_index >= 0:
+            ss.append((self.timeout_index, '    %d: TIMEOUT' %
+                self.timeout_index))
+        ss.sort()
+        ss = list(zip(*ss))[1]
+        return '\n'.join(ss)
+
+    def search(self, buffer, freshlen, searchwindowsize=None):
+
+        '''This searches 'buffer' for the first occurence of one of the regular
+        expressions. 'freshlen' must indicate the number of bytes at the end of
+        'buffer' which have not been searched before.
+
+        See class spawn for the 'searchwindowsize' argument.
+
+        If there is a match this returns the index of that string, and sets
+        'start', 'end' and 'match'. Otherwise, returns -1.'''
+
+        first_match = None
+        # 'freshlen' doesn't help here -- we cannot predict the
+        # length of a match, and the re module provides no help.
+        if searchwindowsize is None:
+            searchstart = 0
+        else:
+            searchstart = max(0, len(buffer) - searchwindowsize)
+        for index, s in self._searches:
+            match = s.search(buffer, searchstart)
+            if match is None:
+                continue
+            n = match.start()
+            if first_match is None or n < first_match:
+                first_match = n
+                the_match = match
+                best_index = index
+        if first_match is None:
+            return -1
+        self.start = first_match
+        self.match = the_match
+        self.end = self.match.end()
+        return best_index
+
 
 def which(filename):
 
