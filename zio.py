@@ -732,7 +732,7 @@ class zio(object):
 
             ret = os.write(self.write_fd, s)
 
-            r, w, e = self.__select([self.write_fd], [], [], timeout)
+            r, w, e = self.__select([self.write_fd], [], [], self.write_delay + 0.01)
 
             if r and self.write_fd in r:
                 data = os.read(self.write_fd, 1024)
@@ -1360,6 +1360,7 @@ if __name__ == '__main__':
         io.interact()
     elif test == 'cat':
         io = zio('cat')
+        io.write('hello zio')
         io.interact()
     elif test == 'ssh':
         io = zio('ssh root@127.0.0.1')
