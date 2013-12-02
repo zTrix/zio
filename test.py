@@ -73,12 +73,27 @@ class Test(unittest.TestCase):
         io.read_until(s[500:600])
         mid = io.read(100)
         self.assertEqual(mid, s[600:700])
+
+    def test_get_pass(self):
+        f = open('/tmp/_test_getpass_zio.py', 'w')
+        f.write("\nimport getpass\n\nprint 'Welcome'\n\na = getpass.getpass('Password:')\n\nif a == 'pass':\n    print 'Logged in'\nelse:\n    print 'Invalid'\n\n")
+        f.close()
+        io = zio('python2 /tmp/_test_getpass_zio.py')
+        io.read_until('Welcome\r\n')
+        io.writeline('pass')
+        line = io.readline()
+        self.assertEqual(line.strip(), 'Logged in', repr(line))
         
 if __name__ == '__main__':
     suite = unittest.TestLoader().loadTestsFromTestCase(Test)
 
-    tests = ['test_cat_eof']
-    # suite = unittest.TestSuite(map(Test, tests))
+    tests = []
+
+    if len(sys.argv) > 1:
+        tests.extend(sys.argv[1:])
+
+    if len(tests):
+        suite = unittest.TestSuite(map(Test, tests))
 
     rs = unittest.TextTestRunner(verbosity = 2).run(suite)
     if len(rs.errors) > 0 or len(rs.failures) > 0:

@@ -81,7 +81,10 @@ class zio(object):
         self.print_write = print_write
         self.print_log = print_log
 
-        self.timeout = timeout
+        if isinstance(timeout, (int, long)) and timeout > 0:
+            self.timeout = timeout
+        else:
+            self.timeout = 10
         self.write_fd = -1          # the fd to write to, no matter subprocess or socket
         self.read_fd = -1           # the fd to read from, no matter subprocess or socket
         self.exit_status = None     # subprocess exit status, for socket, should be 0 if closed normally, or others if exception occurred
@@ -339,7 +342,8 @@ class zio(object):
                'name: %s' % self.name, 
                'timeout: %f' % self.timeout,
                'write-fd: %d' % self.write_fd,
-               'read-fd: %d' % self.read_fd]
+               'read-fd: %d' % self.read_fd,
+               'buffer(last 100 chars): %r' % (self.buffer[-100:])]
         if self.io_type() == zio.IO_SOCKET:
             pass
         elif self.io_type() == zio.IO_PROCESS:
@@ -734,10 +738,14 @@ class zio(object):
 
             r, w, e = self.__select([self.write_fd], [], [], self.write_delay + 0.01)
 
-            if r and self.write_fd in r:
-                data = os.read(self.write_fd, 1024)
-                if self.print_read and data:
-                    os.write(pty.STDOUT_FILENO, data)
+            try:
+                if r and self.write_fd in r:
+                    data = os.read(self.write_fd, 1024)
+                    if self.print_read and data:
+                        n = os.write(pty.STDOUT_FILENO, data)
+            except OSError, err:
+                # write_fd got EOF
+                pass
 
             return ret
 
@@ -839,7 +847,7 @@ class zio(object):
             lines.append(line)
         return lines
 
-    def read_until(self, pattern_list, timeout = -1, searchwindowsize = -1):
+    def read_until(self, pattern_list, timeout = -1, searchwindowsize = None):
         if (isinstance(pattern_list, basestring) or
                 pattern_list in (TIMEOUT, EOF)):
             pattern_list = [pattern_list]
@@ -1031,39 +1039,52 @@ class zio(object):
                 self.flag_eof = True
                 raise EOF('End Of File (EOF). Braindead platform.')
 
-        r, w, e = self.__select([self.read_fd, self.write_fd], [], [], timeout)
+        if timeout is not None and timeout > 0:
+            end_time = time.time() + timeout
+        else:
+            end_time = float('inf')
 
-        if not r:
-            if not self.isalive():
-                # Some platforms, such as Irix, will claim that their
-                # processes are alive; timeout on the select; and
-                # then finally admit that they are not alive.
-                self.flag_eof = True
-                raise EOF('End of File (EOF). Very slow platform.')
-            else:
-                raise TIMEOUT('Timeout exceeded.')
+        while time.time() < end_time:
+            if timeout is not None and timeout > 0:
+                timeout = end_time - time.time()
+            r, w, e = self.__select([self.read_fd, self.write_fd], [], [], timeout)
 
-        if self.write_fd in r:
-            data = os.read(self.write_fd, 1024)
-            if self.print_read and data:
-                os.write(pty.STDOUT_FILENO, data)
+            if not r:
+                if not self.isalive():
+                    # Some platforms, such as Irix, will claim that their
+                    # processes are alive; timeout on the select; and
+                    # then finally admit that they are not alive.
+                    self.flag_eof = True
+                    raise EOF('End of File (EOF). Very slow platform.')
+                else:
+                    continue
 
-        if self.read_fd in r:
             try:
-                s = os.read(self.read_fd, size)
-                if self.print_read: stdout(s)
-            except OSError:
-                # Linux does this
-                self.flag_eof = True
-                raise EOF('End Of File (EOF). Exception style platform.')
-            if s == b'':
-                # BSD style
-                self.flag_eof = True
-                raise EOF('End Of File (EOF). Empty string style platform.')
+                if self.write_fd in r:
+                    data = os.read(self.write_fd, 1024)
+                    if self.print_read and data:
+                        n = os.write(pty.STDOUT_FILENO, data)
+            except OSError, err:
+                # write_fd read EOF (echo back)
+                pass
 
-            return s
+            if self.read_fd in r:
+                try:
+                    s = os.read(self.read_fd, size)
+                    if self.print_read and s: os.write(pty.STDOUT_FILENO, s)
+                except OSError:
+                    # Linux does this
+                    self.flag_eof = True
+                    raise EOF('End Of File (EOF). Exception style platform.')
+                if s == b'':
+                    # BSD style
+                    self.flag_eof = True
+                    raise EOF('End Of File (EOF). Empty string style platform.')
 
-        raise Exception('Reached an unexpected state.')
+                return s
+
+        raise TIMEOUT('Timeout exceeded. size to read: %d' % size)
+        # raise Exception('Reached an unexpected state, timeout = %d' % (timeout))
 
     # apis below
     read_after = read_before = read_between = read_range = read_line = readable = _not_impl
