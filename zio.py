@@ -526,16 +526,6 @@ class zio(object):
         mode = tty.tcgetattr(pty.STDIN_FILENO)
         tty.setraw(pty.STDIN_FILENO)
         try:
-            # first release all echo back, because we have already printed them out when writing
-            while self.isalive():
-                r, w, e = self.__select([self.write_fd], [], [], timeout = 0.1)
-                if self.write_fd in r:
-                    try:
-                        os.read(self.write_fd, 1024)
-                    except OSError, e:
-                        pass
-                else:
-                    break
                 
             while self.isalive():
                 # write_fd for tty echo
@@ -740,8 +730,16 @@ class zio(object):
 
             if not isinstance(s, bytes): s = s.encode('utf-8')
 
-            if self.print_write: stdout(s)
-            return os.write(self.write_fd, s)
+            ret = os.write(self.write_fd, s)
+
+            r, w, e = self.__select([self.write_fd], [], [], timeout)
+
+            if r and self.write_fd in r:
+                data = os.read(self.write_fd, 1024)
+                if self.print_read and data:
+                    os.write(pty.STDOUT_FILENO, data)
+
+            return ret
 
             #self.lock.release()
 
@@ -1033,7 +1031,7 @@ class zio(object):
                 self.flag_eof = True
                 raise EOF('End Of File (EOF). Braindead platform.')
 
-        r, w, e = self.__select([self.read_fd], [], [], timeout)
+        r, w, e = self.__select([self.read_fd, self.write_fd], [], [], timeout)
 
         if not r:
             if not self.isalive():
@@ -1044,6 +1042,11 @@ class zio(object):
                 raise EOF('End of File (EOF). Very slow platform.')
             else:
                 raise TIMEOUT('Timeout exceeded.')
+
+        if self.write_fd in r:
+            data = os.read(self.write_fd, 1024)
+            if self.print_read and data:
+                os.write(pty.STDOUT_FILENO, data)
 
         if self.read_fd in r:
             try:
@@ -1360,5 +1363,11 @@ if __name__ == '__main__':
         io.interact()
     elif test == 'ssh':
         io = zio('ssh root@127.0.0.1')
+        io.interact()
+    elif test == 'getpass':
+        f = open('/tmp/_test_getpass_zio.py', 'w')
+        f.write("\nimport getpass\n\nprint 'Welcome'\n\na = getpass.getpass('Password:')\n\nif a == 'pass':\n    print 'Logged in'\nelse:\n    print 'Invalid'\n\n")
+        f.close()
+        io = zio('python2 /tmp/_test_getpass_zio.py')
         io.interact()
 
