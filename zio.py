@@ -106,12 +106,17 @@ class zio(object):
 
         if self.io_type() == 'socket':
             #TODO: udp support ?
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.connect(self.target)
+            self.sock = socket.create_connection(self.target, self.timeout)
             self.name = '<socket ' + self.target[0] + ':' + str(self.target[1]) + '>'
+            # yeah, its not fd, but let's call it a fd though
+            self.read_fd = self.sock
+            self.write_fd = self.sock
         else:
             self.pid = None
             self._spawn(target)
+
+        self.terminated = False
+        self.closed = False
 
     def _spawn(self, target):
         
@@ -225,9 +230,6 @@ class zio(object):
             if gc_enabled:
                 gc.enable()
 
-        # parent goes here
-        self.terminated = False
-        self.closed = False
 
     def __pty_make_controlling_tty(self, tty_fd):
         '''This makes the pseudo-terminal the controlling tty. This should be
@@ -301,7 +303,10 @@ class zio(object):
     def fileno(self):
         '''This returns the file descriptor of the pty for the child.
         '''
-        return self.read_fd
+        if self.io_type() == zio.IO_SOCKET:
+            return self.sock.fileno()
+        else:
+            return self.read_fd
 
     def setwinsize(self, fd, rows, cols):   # from pexpect, thanks!
 
@@ -343,7 +348,8 @@ class zio(object):
                'timeout: %f' % self.timeout,
                'write-fd: %d' % self.write_fd,
                'read-fd: %d' % self.read_fd,
-               'buffer(last 100 chars): %r' % (self.buffer[-100:])]
+               'buffer(last 100 chars): %r' % (self.buffer[-100:]),
+               'eof: %s' % self.flag_eof]
         if self.io_type() == zio.IO_SOCKET:
             pass
         elif self.io_type() == zio.IO_PROCESS:
@@ -366,6 +372,10 @@ class zio(object):
         SIGHUP and SIGINT. If "force" is True then moves onto SIGKILL. This
         returns True if the child was terminated. This returns False if the
         child could not be terminated. '''
+
+        if self.io_type() != zio.IO_PROCESS:
+            # should I raise something?
+            return
 
         if not self.isalive():
             return True
@@ -449,6 +459,9 @@ class zio(object):
         process appears to be running or False if not. It can take literally
         SECONDS for Solaris to return the right status. '''
 
+        if self.io_type() == zio.IO_SOCKET:
+            return not self.flag_eof
+
         if self.terminated:
             return False
 
@@ -525,12 +538,42 @@ class zio(object):
         when stdin is passed using os.pipe, backspace key will not work as expected, 
         if write_fd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so I choose to translate 0x7f to ^H by default, by setting input_filter = lambda x: x.replace('\x7f', '\x08')
         """
-        stdout(self.buffer)
+        if self.io_type() == zio.IO_SOCKET:
+            while self.isalive():
+                r, w, e = self.__select([self.read_fd, pty.STDIN_FILENO], [], [])
+                if self.read_fd in r:
+                    try:
+                        data = None
+                        data = self._read(1024)
+                        if data:
+                            if output_filter: data = output_filter(data)
+                            os.write(pty.STDOUT_FILENO, data)
+                    except EOF:
+                        self.flag_eof = True
+                        break
+                if pty.STDIN_FILENO in r:
+                    try:
+                        data = None
+                        data = os.read(pty.STDIN_FILENO, 1024)
+                    except OSError, e:
+                        # the subprocess may have closed before we get to reading it
+                        if e.errno != errno.EIO:
+                            raise
+                    if data is not None:
+                        if input_filter: data = input_filter(data)
+                        i = data.rfind(escape_character)
+                        if i != -1: data = data[:i]
+                        while data != b'' and self.isalive():
+                            n = self._write(data)
+                            data = data[n:]
+                        if i != -1:
+                            break
+            return
+
         self.buffer = str()
         mode = tty.tcgetattr(pty.STDIN_FILENO)
         tty.setraw(pty.STDIN_FILENO)
         try:
-                
             while self.isalive():
                 # write_fd for tty echo
                 r, w, e = self.__select([self.read_fd, pty.STDIN_FILENO, self.write_fd], [], [])
@@ -567,7 +610,7 @@ class zio(object):
                         i = data.rfind(escape_character)
                         if i != -1: data = data[:i]
                         while data != b'' and self.isalive():
-                            n = os.write(self.write_fd, data)
+                            n = self._write(data)
                             data = data[n:]
                         if i != -1:
                             break
@@ -716,20 +759,15 @@ class zio(object):
         return n
 
     def writeline(self, s = ''):
-        n = self.write(s)
-        n += self.write(os.linesep)
-        return n
+        return self.write(s + os.linesep)
 
     def write(self, s):
         if self.io_type() == zio.IO_SOCKET:
-            #self.lock.acquire()
             if self.print_write: stdout(s)
             self.sock.sendall(s)
-            #self.lock.release()
             return len(s)
         elif self.io_type() == zio.IO_PROCESS:
             #if not self.writable(): raise Exception('subprocess stdin not writable')
-            #self.lock.acquire()
             time.sleep(self.write_delay)
 
             if not isinstance(s, bytes): s = s.encode('utf-8')
@@ -748,8 +786,6 @@ class zio(object):
                 pass
 
             return ret
-
-            #self.lock.release()
 
     def writeeof(self):
         if hasattr(termios, 'VEOF'):
@@ -788,32 +824,25 @@ class zio(object):
             return 0
         return self.write(chr(d[char]))
 
-
     def close(self, force = True):
+        if self.closed:
+            return
         if self.io_type() == 'socket':
-            self.lock.acquire()
-            self.sock.close()
-            self.lock.release()
+            if self.sock:
+                self.sock.close()
+            self.sock = None
+            self.flag_eof = True
         else:
-            if not self.closed:
-                self.flush()
-                os.close(self.write_fd)
-                os.close(self.read_fd)
-                time.sleep(self.close_delay)
-                if self.isalive():
-                    if not self.terminate(force):
-                        raise Exception('Could not terminate child process')
-                self.read_fd = -1
-                self.write_fd = -1
-                self.closed = True
-
-    def _read(self, size):
-        if self.io_type() == 'socket':
-            return self.sock.recv(size)
-        else:
-            #TODO: filter first \r out
-            #TODO: eof detection, pty won't give us eof
-            return self.proc.output.read(size)
+            self.flush()
+            os.close(self.write_fd)
+            os.close(self.read_fd)
+            time.sleep(self.close_delay)
+            if self.isalive():
+                if not self.terminate(force):
+                    raise Exception('Could not terminate child process')
+            self.read_fd = -1
+            self.write_fd = -1
+        self.closed = True
 
     def read(self, size = None):
         if size == 0:
@@ -829,6 +858,9 @@ class zio(object):
             return self.after
         return self.before
 
+    def readable(self):
+        return self.__select([self.read_fd], [], [], 0) == ([self.read_fd], [], [])
+
     def readline(self, size = -1):
         if size == 0:
             return str()
@@ -837,6 +869,8 @@ class zio(object):
             return self.before + b'\n'
         else:
             return self.before
+
+    read_line = readline
 
     def readlines(self, sizehint = -1):
         lines = []
@@ -999,13 +1033,24 @@ class zio(object):
                 self._pattern_type_err(p)
         return compiled_pattern_list
 
+    def _read(self, size):
+        if self.io_type() == zio.IO_PROCESS:
+            return os.read(self.read_fd, size)
+        else:
+            return self.sock.recv(size)
+
+    def _write(self, s):
+        if self.io_type() == zio.IO_PROCESS:
+            return os.write(self.write_fd, s)
+        else:
+            self.sock.sendall(s)
+            return len(s)
 
     def read_nonblocking(self, size=1, timeout=-1):
         '''This reads at most size characters from the child application. It
         includes a timeout. If the read does not complete within the timeout
         period then a TIMEOUT exception is raised. If the end of file is read
-        then an EOF exception will be raised. If a log file was set using
-        setlog() then all data will also be written to the log file.
+        then an EOF exception will be raised. 
 
         If timeout is None then the read may block indefinitely.
         If timeout is -1 then the self.timeout value is used. If timeout is 0
@@ -1044,10 +1089,17 @@ class zio(object):
         else:
             end_time = float('inf')
 
-        while time.time() < end_time:
+        readfds = [self.read_fd]
+
+        if self.io_type() == zio.IO_PROCESS:
+            readfds.append(self.write_fd)
+
+        while True:
+            now = time.time()
+            if now > end_time: break
             if timeout is not None and timeout > 0:
-                timeout = end_time - time.time()
-            r, w, e = self.__select([self.read_fd, self.write_fd], [], [], timeout)
+                timeout = end_time - now
+            r, w, e = self.__select(readfds, [], [], timeout)
 
             if not r:
                 if not self.isalive():
@@ -1059,18 +1111,19 @@ class zio(object):
                 else:
                     continue
 
-            try:
-                if self.write_fd in r:
-                    data = os.read(self.write_fd, 1024)
-                    if self.print_read and data:
-                        n = os.write(pty.STDOUT_FILENO, data)
-            except OSError, err:
-                # write_fd read EOF (echo back)
-                pass
+            if self.io_type() == zio.IO_PROCESS:
+                try:
+                    if self.write_fd in r:
+                        data = os.read(self.write_fd, 1024)
+                        if self.print_read and data:
+                            n = os.write(pty.STDOUT_FILENO, data)
+                except OSError, err:
+                    # write_fd read EOF (echo back)
+                    pass
 
             if self.read_fd in r:
                 try:
-                    s = os.read(self.read_fd, size)
+                    s = self._read(size)
                     if self.print_read and s: os.write(pty.STDOUT_FILENO, s)
                 except OSError:
                     # Linux does this
@@ -1087,7 +1140,7 @@ class zio(object):
         # raise Exception('Reached an unexpected state, timeout = %d' % (timeout))
 
     # apis below
-    read_after = read_before = read_between = read_range = read_line = readable = _not_impl
+    read_after = read_before = read_between = read_range = _not_impl
 
 class searcher_string(object):
 
@@ -1381,7 +1434,8 @@ if __name__ == '__main__':
         io.interact()
     elif test == 'cat':
         io = zio('cat')
-        io.write('hello zio')
+        io.writeline('hello zio')
+        io.read_until('he')
         io.interact()
     elif test == 'ssh':
         io = zio('ssh root@127.0.0.1')
@@ -1392,4 +1446,11 @@ if __name__ == '__main__':
         f.close()
         io = zio('python2 /tmp/_test_getpass_zio.py')
         io.interact()
+    elif test == 'sock_cat':
+        import subprocess
+        p = subprocess.Popen(['socat', '-d', 'TCP-LISTEN:9999,reuseaddr,fork', 'exec:cat'])
+        time.sleep(0.5)
+        io = zio(('localhost', 9999))
+        io.interact()
+        p.kill()
 
