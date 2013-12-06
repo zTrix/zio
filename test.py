@@ -83,6 +83,13 @@ class Test(unittest.TestCase):
         io.writeline('pass')
         line = io.readline()
         self.assertEqual(line.strip(), 'Logged in', repr(line))
+
+    def test_http(self):
+        io = zio(('ifconfig.me', 80))
+        io.write('GET / HTTP/1.1\r\nHOST: ifconfig.me\r\nUser-Agent: curl\r\n\r\n')
+        self.assertEqual(io.read(5), 'HTTP/', 'bad http line')
+        self.assertEqual(io.readline().strip(), '1.1 200 OK', 'bad http line')
+        io.close()
         
 if __name__ == '__main__':
     suite = unittest.TestLoader().loadTestsFromTestCase(Test)

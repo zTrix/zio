@@ -1,7 +1,11 @@
 #!/usr/bin/env python2
 
 import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc
-from StringIO import StringIO
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
 try:
     from termcolor import colored
 except:
@@ -346,8 +350,8 @@ class zio(object):
         ret = ['io-type: %s' % self.io_type(), 
                'name: %s' % self.name, 
                'timeout: %f' % self.timeout,
-               'write-fd: %d' % self.write_fd,
-               'read-fd: %d' % self.read_fd,
+               'write-fd: %d' % isinstance(self.write_fd, (int, long)) and self.write_fd or self.fileno(),
+               'read-fd: %d' % isinstance(self.read_fd, (int, long)) and self.read_fd or self.fileno(),
                'buffer(last 100 chars): %r' % (self.buffer[-100:]),
                'eof: %s' % self.flag_eof]
         if self.io_type() == zio.IO_SOCKET:
@@ -1038,7 +1042,12 @@ class zio(object):
         if self.io_type() == zio.IO_PROCESS:
             return os.read(self.read_fd, size)
         else:
-            return self.sock.recv(size)
+            try:
+                return self.sock.recv(size)
+            except socket.error, err:
+                if err.args[0] == errno.ECONNRESET:
+                    raise EOF('Connection reset by peer')
+                raise err
 
     def _write(self, s):
         if self.io_type() == zio.IO_PROCESS:
