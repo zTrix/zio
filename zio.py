@@ -623,7 +623,8 @@ class zio(object):
                     except OSError, e:
                         if e.errno != errno.EIO:
                             raise
-                    if data is not None:
+                    # in BSD, you can still read '' from read_fd, so never use `data is not None` here
+                    if data:
                         if output_filter: data = output_filter(data)
                         os.write(pty.STDOUT_FILENO, data)
                     else:
@@ -1454,3 +1455,4 @@ if __name__ == '__main__':
         io.interact()
         p.kill()
 
+# vi:set et ts=4 sw=4 ft=python :
