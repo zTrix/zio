@@ -350,8 +350,8 @@ class zio(object):
         ret = ['io-type: %s' % self.io_type(), 
                'name: %s' % self.name, 
                'timeout: %f' % self.timeout,
-               'write-fd: %d' % isinstance(self.write_fd, (int, long)) and self.write_fd or self.fileno(),
-               'read-fd: %d' % isinstance(self.read_fd, (int, long)) and self.read_fd or self.fileno(),
+               'write-fd: %d' % (isinstance(self.write_fd, (int, long)) and self.write_fd or self.fileno()),
+               'read-fd: %d' % (isinstance(self.read_fd, (int, long)) and self.read_fd or self.fileno()),
                'buffer(last 100 chars): %r' % (self.buffer[-100:]),
                'eof: %s' % self.flag_eof]
         if self.io_type() == zio.IO_SOCKET:
@@ -869,7 +869,11 @@ class zio(object):
     def readline(self, size = -1):
         if size == 0:
             return str()
-        index = self.read_loop(searcher_re(self.compile_pattern_list([b'\r\n', EOF])))
+        if self.io_type() == zio.IO_PROCESS:
+            lineseps = [b'\r\n', EOF]
+        else:
+            lineseps = [b'\r\n', b'\n', EOF]
+        index = self.read_loop(searcher_re(self.compile_pattern_list(lineseps)))
         if index == 0:
             return self.before + b'\n'
         else:
