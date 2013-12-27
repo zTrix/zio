@@ -5,6 +5,8 @@
 
 [![endorse](http://api.coderwall.com/ztrix/endorsecount.png)](http://coderwall.com/ztrix)
 
+[![Bitdeli Badge](https://d2weczhvl823v0.cloudfront.net/zTrix/zio/trend.png)](https://bitdeli.com/free "Bitdeli Badge")
+
 `zio` is an expect-like io library, modified from [pexpect](https://github.com/pexpect/pexpect).
 
 ## Examples

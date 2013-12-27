@@ -784,7 +784,7 @@ class zio(object):
             try:
                 if r and self.write_fd in r:
                     data = os.read(self.write_fd, 1024)
-                    if self.print_read and data:
+                    if self.print_write and data:
                         n = os.write(pty.STDOUT_FILENO, data)
             except OSError, err:
                 # write_fd got EOF
