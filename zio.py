@@ -18,7 +18,7 @@ def stdout(s, color = None, on_color = None, attrs = None):
     if not color:
         sys.stdout.write(s)
     else:
-        sys.stdout.write(colorde(s, color, on_color, attrs))
+        sys.stdout.write(colored(s, color, on_color, attrs))
     sys.stdout.flush()
 
 def log(s, color = None, on_color = None, attrs = None, new_line = True):
@@ -30,23 +30,12 @@ def log(s, color = None, on_color = None, attrs = None, new_line = True):
         sys.stderr.write('\n')
     sys.stderr.flush()
 
-def l16(i):
-    return struct.pack('<H', i)
-
-def b16(i):
-    return struct.pack('>H', i)
-
-def l32(i):
-    return struct.pack('<I', i)
-
-def b32(i):
-    return struct.pack('>I', i)
-
-def l64(i):
-    return struct.pack('<Q', i)
-
-def b64(i):
-    return struct.pack('>Q', i)
+def l16(i): return isinstance(i, (int, long)) and struct.pack('<H', i) or struct.unpack('<H', i)[0]
+def b16(i): return isinstance(i, (int, long)) and struct.pack('>H', i) or struct.unpack('>H', i)[0]
+def l32(i): return isinstance(i, (int, long)) and struct.pack('<I', i) or struct.unpack('<I', i)[0]
+def b32(i): return isinstance(i, (int, long)) and struct.pack('>I', i) or struct.unpack('>I', i)[0]
+def l64(i): return isinstance(i, (int, long)) and struct.pack('<Q', i) or struct.unpack('<Q', i)[0]
+def b64(i): return isinstance(i, (int, long)) and struct.pack('>Q', i) or struct.unpack('>Q', i)[0]
 
 class EOF(Exception):
     """Raised when EOF is read from child or socket.
