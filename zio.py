@@ -30,12 +30,12 @@ def log(s, color = None, on_color = None, attrs = None, new_line = True):
         sys.stderr.write('\n')
     sys.stderr.flush()
 
-def l16(i): return isinstance(i, (int, long)) and struct.pack('<H', i) or struct.unpack('<H', i)[0]
-def b16(i): return isinstance(i, (int, long)) and struct.pack('>H', i) or struct.unpack('>H', i)[0]
-def l32(i): return isinstance(i, (int, long)) and struct.pack('<I', i) or struct.unpack('<I', i)[0]
-def b32(i): return isinstance(i, (int, long)) and struct.pack('>I', i) or struct.unpack('>I', i)[0]
-def l64(i): return isinstance(i, (int, long)) and struct.pack('<Q', i) or struct.unpack('<Q', i)[0]
-def b64(i): return isinstance(i, (int, long)) and struct.pack('>Q', i) or struct.unpack('>Q', i)[0]
+def l16(i): return isinstance(i, (int, long)) and struct.pack('<H', i % (1<<16)) or struct.unpack('<H', i)[0]
+def b16(i): return isinstance(i, (int, long)) and struct.pack('>H', i % (1<<16)) or struct.unpack('>H', i)[0]
+def l32(i): return isinstance(i, (int, long)) and struct.pack('<I', i % (1<<32)) or struct.unpack('<I', i)[0]
+def b32(i): return isinstance(i, (int, long)) and struct.pack('>I', i % (1<<32)) or struct.unpack('>I', i)[0]
+def l64(i): return isinstance(i, (int, long)) and struct.pack('<Q', i % (1<<64)) or struct.unpack('<Q', i)[0]
+def b64(i): return isinstance(i, (int, long)) and struct.pack('>Q', i % (1<<64)) or struct.unpack('>Q', i)[0]
 
 class EOF(Exception):
     """Raised when EOF is read from child or socket.

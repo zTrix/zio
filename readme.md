@@ -14,3 +14,15 @@
     from zio import *
     io = zio('vim')
     io.interact()
+
+## Document
+
+### about line break
+
+Just don't read '\n' or '\r', use readline() instead
+
+## TODO
+
+ - add attach_gdb function
+ - handle Ctrl-V Ctrl-C signal
+ - raw mode
