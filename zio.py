@@ -49,10 +49,14 @@ class zio(object):
     IO_SOCKET = 'socket'
     IO_PROCESS = 'process'
 
+    def repr(s): return repr(str(s))[1:-1]
+    def hex(s): return str(s).encode('hex')
+    def raw(s): return s
+
     # TODO: logfile support ?
     def __init__(self, target, print_read = True, print_write = True, print_log = True, timeout = 10, cwd = None, env = None, ignore_sighup = True, write_delay = 0.05, ignorecase = False):
         """
-        zio is an easy-to-use io library for your target, currently zio supports process io and tcp socket
+        zio is an easy-to-use io library for pwning test/poc, currently zio supports process io and tcp socket
 
         example:
 
@@ -77,7 +81,7 @@ class zio(object):
         if isinstance(timeout, (int, long)) and timeout > 0:
             self.timeout = timeout
         else:
-            self.timeout = 10
+            self.timeout = 8
         self.write_fd = -1          # the fd to write to, no matter subprocess or socket
         self.read_fd = -1           # the fd to read from, no matter subprocess or socket
         self.exit_status = None     # subprocess exit status, for socket, should be 0 if closed normally, or others if exception occurred
@@ -157,8 +161,7 @@ class zio(object):
 
         if self.pid < 0:
             raise Exception('failed to fork')
-        elif self.pid == 0:
-            # Child
+        elif self.pid == 0:     # Child
             os.close(master_fd)
 
             self.__pty_make_controlling_tty(p2cread)
@@ -171,18 +174,6 @@ class zio(object):
                 if self.print_log: log('[ WARN ] setwinsize exception: %s' % (str(ex)), 'yellow')
                 pass
 
-            # redirect stdout and stderr to pty
-            # but don't redirect stdin, because it will get echoed back, which is not what we want
-
-            os.dup2(slave_fd, pty.STDOUT_FILENO)
-            os.dup2(slave_fd, pty.STDERR_FILENO)
-
-            if slave_fd > 2:
-                os.close(slave_fd)
-
-            if p2cwrite is not None:
-                os.close(p2cwrite)
-
             # Dup fds for child
             def _dup2(a, b):
                 # dup2() removes the CLOEXEC flag but
@@ -192,7 +183,19 @@ class zio(object):
                     self._set_cloexec_flag(a, False)
                 elif a is not None:
                     os.dup2(a, b)
+
+            # redirect stdout and stderr to pty
+            os.dup2(slave_fd, pty.STDOUT_FILENO)
+            os.dup2(slave_fd, pty.STDERR_FILENO)
+
+            # redirect stdin to p2cread instead of slave_fd, to prevent input echoed back
             _dup2(p2cread, pty.STDIN_FILENO)
+
+            if slave_fd > 2:
+                os.close(slave_fd)
+
+            if p2cwrite is not None:
+                os.close(p2cwrite)
 
             # do not allow child to inherit open file descriptors from parent
 
@@ -210,13 +213,20 @@ class zio(object):
             else:
                 os.execvpe(self.command, self.args, self.env)
             
-            # TODO: add subprocess errpipe to detech child error
+            # TODO: add subprocess errpipe to detect child error
             # child exit here, the same as subprocess module do
             os._exit(255)
 
         else:
             # after fork, parent
             self.write_fd = p2cwrite
+
+            # there is no way to eliminate controlling characters in tcattr
+            # so we have to set raw mode here now
+            self._write_fd_init_mode = tty.tcgetattr(self.write_fd)[:]
+            self.ttyraw_with_echo(self.write_fd)
+            self._write_fd_raw_mode = tty.tcgetattr(self.write_fd)[:]
+
             os.close(p2cread)
             self.read_fd = master_fd
             os.close(slave_fd)
@@ -565,7 +575,14 @@ class zio(object):
 
         self.buffer = str()
         mode = tty.tcgetattr(pty.STDIN_FILENO)
-        tty.setraw(pty.STDIN_FILENO)
+        tty.setraw(pty.STDIN_FILENO)        # set to raw mode to pass all input thru, supporting apps as vim
+        # here, enable cooked mode for process stdin
+        # but we should only enable for those who need cooked mode, not stuff like vim
+        # we just do a simple detection here
+        wfd_mode = tty.tcgetattr(self.write_fd)
+        if wfd_mode == self._write_fd_raw_mode:     # if untouched by forked child
+            tty.tcsetattr(self.write_fd, tty.TCSAFLUSH, self._write_fd_init_mode)
+
         try:
             while self.isalive():
                 # write_fd for tty echo
@@ -626,6 +643,7 @@ class zio(object):
                     break
         finally:
             tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, mode)
+            self.ttyraw_with_echo(self.write_fd)
 
     def flush(self):
         """
@@ -639,57 +657,15 @@ class zio(object):
 
         return os.isatty(self.read_fd)
 
-    def waitnoecho(self, timeout=-1):
-        '''This waits until the terminal ECHO flag is set False. This returns
-        True if the echo mode is off. This returns False if the ECHO flag was
-        not set False before the timeout. This can be used to detect when the
-        child is waiting for a password. Usually a child application will turn
-        off echo mode when it is waiting for the user to enter a password. For
-        example, instead of expecting the "password:" prompt you can wait for
-        the child to set ECHO off::
-
-            p = pexpect.spawn('ssh user@example.com')
-            p.waitnoecho()
-            p.sendline(mypassword)
-
-        If timeout==-1 then this method will use the value in self.timeout.
-        If timeout==None then this method to block until ECHO flag is False.
-        '''
-
-        if timeout == -1:
-            timeout = self.timeout
-        if timeout is not None:
-            end_time = time.time() + timeout
-        while True:
-            if not self.getecho():
-                return True
-            if timeout < 0 and timeout is not None:
-                return False
-            if timeout is not None:
-                timeout = end_time - time.time()
-            time.sleep(0.1)
-
-    def getecho(self, fd):
-        '''This returns the terminal echo mode. This returns True if echo is
-        on or False if echo is off. Child applications that are expecting you
-        to enter a password often set ECHO False. See waitnoecho(). '''
-
-        attr = termios.tcgetattr(self.fd)
-        if attr[3] & termios.ECHO:
-            return True
-        return False
-
-    def setecho(self, fd, state):
-
-        attr = termios.tcgetattr(self.read_fd)
-        if state:
-            attr[3] = attr[3] | termios.ECHO
-        else:
-            attr[3] = attr[3] & ~termios.ECHO
-        # I tried TCSADRAIN and TCSAFLUSH, but
-        # these were inconsistent and blocked on some platforms.
-        # TCSADRAIN would probably be ideal if it worked.
-        termios.tcsetattr(self.fd, termios.TCSANOW, attr)
+    def ttyraw_with_echo(self, fd):
+        mode = tty.tcgetattr(fd)[:]
+        mode[tty.IFLAG] = mode[tty.IFLAG] & ~(tty.BRKINT | tty.ICRNL | tty.INPCK | tty.ISTRIP | tty.IXON)
+        mode[tty.CFLAG] = mode[tty.CFLAG] & ~(tty.CSIZE | tty.PARENB)
+        mode[tty.CFLAG] = mode[tty.CFLAG] | tty.CS8
+        mode[tty.LFLAG] = mode[tty.LFLAG] & ~(tty.ICANON | tty.IEXTEN | tty.ISIG)
+        mode[tty.CC][tty.VMIN] = 1
+        mode[tty.CC][tty.VTIME] = 0
+        tty.tcsetattr(fd, tty.TCSAFLUSH, mode)
 
     def seterase(self, fd, erase_char = chr(0x7f)):
         attr = termios.tcgetattr(fd)
@@ -782,12 +758,11 @@ class zio(object):
             return ret
 
     def writeeof(self):
-        if hasattr(termios, 'VEOF'):
-            char = ord(termios.tcgetattr(self.write_fd)[6][termios.VEOF])
+        if self.io_type() == zio.IO_SOCKET:
+            self.sock.shutdown(SHUT_WR)
         else:
-            # platform does not define VEOF so assume CTRL-D
-            char = 4
-        self.write(chr(char))
+            os.close(self.write_fd)
+        return
 
     write_eof = writeeof
 
@@ -828,7 +803,10 @@ class zio(object):
             self.flag_eof = True
         else:
             self.flush()
-            os.close(self.write_fd)
+            try:
+                os.close(self.write_fd)
+            except:
+                pass    # may already closed in write_eof
             os.close(self.read_fd)
             time.sleep(self.close_delay)
             if self.isalive():
@@ -1095,7 +1073,11 @@ class zio(object):
         readfds = [self.read_fd]
 
         if self.io_type() == zio.IO_PROCESS:
-            readfds.append(self.write_fd)
+            try:
+                os.fstat(self.write_fd)
+                readfds.append(self.write_fd)
+            except:
+                pass
 
         while True:
             now = time.time()
@@ -1434,6 +1416,10 @@ if __name__ == '__main__':
         io.interact()
     elif test == 'vim':
         io = zio('vim', write_delay = 0)
+        io.interact()
+    elif test == 'sleep-vim':
+        io = zio('vim', write_delay = 0)
+        time.sleep(2)
         io.interact()
     elif test == 'cat':
         io = zio('cat')
