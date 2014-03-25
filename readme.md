@@ -17,13 +17,13 @@
 
 ## Document
 
-### about line break
+### about line break and carriage return
 
-Just don't read '\n' or '\r', use readline() instead
+Just don't read '\n' or '\r', use `readline()` instead
 
 ## Thanks (Also references)
 
- - [pexpect](https://github.com/pexpect/pexpect)
+ - [pexpect](https://github.com/pexpect/pexpect) I borrowed a lot of code from here
  - [sh](https://github.com/amoffat/sh)
  - python subprocess module
  - TTY related

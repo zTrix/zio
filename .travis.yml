@@ -2,8 +2,8 @@ language: python
 python:
   - "2.6"
   - "2.7"
-before_install:
+install:
   - "sudo apt-get install --no-install-recommends socat"
-# install: "pip install termcolor"
+  - "pip install termcolor"
 script: 
   - python test/test.py

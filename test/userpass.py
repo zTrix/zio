@@ -10,8 +10,8 @@ user = raw_input('Username: ')
 # from tty stdin, while zio handle stdin and stdout/stderr in two ttys.
 pswd = getpass.getpass('Password: ', stream = sys.stdout)
 
-if pswd == 'pass':
+if user == 'user' and pswd == 'pass':
     print 'Logged in'
 else:
-    print 'Invalid'
+    print 'Invalid', repr(user), repr(pswd)
 

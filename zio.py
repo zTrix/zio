@@ -1,6 +1,6 @@
 #!/usr/bin/env python2
 
-import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc
+import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc, platform
 try:
     from cStringIO import StringIO
 except ImportError:
@@ -57,7 +57,7 @@ def RAW(s): return str(s)
 class zio(object):
 
     # TODO: logfile support ?
-    def __init__(self, target, stdin = TTY, stdout = TTY, print_read = RAW, print_write = RAW, timeout = 8, cwd = None, env = None, sighup = signal.SIG_IGN, write_delay = 0.05, ignorecase = False):
+    def __init__(self, target, stdin = PIPE, stdout = TTY, print_read = RAW, print_write = RAW, timeout = 8, cwd = None, env = None, sighup = signal.SIG_IGN, write_delay = 0.05, ignorecase = False):
         """
         zio is an easy-to-use io library for pwning development, supporting an unified interface for local process pwning and remote tcp socket io
 
@@ -163,9 +163,10 @@ class zio(object):
             raise Exception('failed to fork')
         elif self.pid == 0:     # Child
             os.close(stdout_master_fd)
-
-            self.__pty_make_controlling_tty(stdin_slave_fd)
-            # self.__pty_make_controlling_tty(stdout_slave_fd)
+            
+            if os.isatty(stdin_slave_fd):
+                self.__pty_make_controlling_tty(stdin_slave_fd)
+                # self.__pty_make_controlling_tty(stdout_slave_fd)
 
             try:
                 if os.isatty(stdout_slave_fd):
@@ -223,11 +224,12 @@ class zio(object):
             # after fork, parent
             self.wfd = stdin_master_fd
 
-            # there is no way to eliminate controlling characters in tcattr
-            # so we have to set raw mode here now
-            self._wfd_init_mode = tty.tcgetattr(self.wfd)[:]
-            self.ttyraw(self.wfd)
-            self._wfd_raw_mode = tty.tcgetattr(self.wfd)[:]
+            if os.isatty(self.wfd):
+                # there is no way to eliminate controlling characters in tcattr
+                # so we have to set raw mode here now
+                self._wfd_init_mode = tty.tcgetattr(self.wfd)[:]
+                self.ttyraw(self.wfd)
+                self._wfd_raw_mode = tty.tcgetattr(self.wfd)[:]
 
             os.close(stdin_slave_fd)
             self.rfd = stdout_master_fd
@@ -575,20 +577,24 @@ class zio(object):
             return
 
         self.buffer = str()
-        mode = tty.tcgetattr(pty.STDIN_FILENO)
+        mode = tty.tcgetattr(pty.STDIN_FILENO)  # mode will be restored after interact
         tty.setraw(pty.STDIN_FILENO)        # set to raw mode to pass all input thru, supporting apps as vim
         # here, enable cooked mode for process stdin
         # but we should only enable for those who need cooked mode, not stuff like vim
         # we just do a simple detection here
-        wfd_mode = tty.tcgetattr(self.wfd)
-        if wfd_mode == self._wfd_raw_mode:     # if untouched by forked child
-            tty.tcsetattr(self.wfd, tty.TCSAFLUSH, self._wfd_init_mode)
+        if os.isatty(self.wfd):
+            wfd_mode = tty.tcgetattr(self.wfd)
+            if wfd_mode == self._wfd_raw_mode:     # if untouched by forked child
+                tty.tcsetattr(self.wfd, tty.TCSAFLUSH, self._wfd_init_mode)
 
         try:
             while self.isalive():
-                # wfd for tty echo
-                r, w, e = self.__select([self.rfd, pty.STDIN_FILENO, self.wfd], [], [])
-                if self.wfd in r:          # handle tty echo first
+                rfdlist = [self.rfd, pty.STDIN_FILENO]
+                if os.isatty(self.wfd):
+                    # wfd for tty echo
+                    rfdlist.append(self.wfd)
+                r, w, e = self.__select(rfdlist, [], [])
+                if self.wfd in r:          # handle tty echo back first if wfd is a tty
                     try:
                         data = None
                         data = os.read(self.wfd, 1024)
@@ -620,10 +626,15 @@ class zio(object):
                         if input_filter: data = input_filter(data)
                         i = data.rfind(escape_character)
                         if i != -1: data = data[:i]
+                        if not os.isatty(self.wfd):     # we must do the translation when tty does not help
+                            data = data.replace('\r', '\n')
+                            # also echo back by ourselves
+                            stdout(data)
                         while data != b'' and self.isalive():
                             n = self._write(data)
                             data = data[n:]
                         if i != -1:
+                            self.end()
                             break
             while True:
                 r, w, e = self.__select([self.rfd], [], [], timeout = self.close_delay)
@@ -644,7 +655,8 @@ class zio(object):
                     break
         finally:
             tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, mode)
-            self.ttyraw(self.wfd)
+            if os.isatty(self.wfd):
+                self.ttyraw(self.wfd)
 
     def flush(self):
         """
@@ -749,11 +761,27 @@ class zio(object):
 
             return ret
 
-    def end(self):
+    def end(self, force_close = False):
         if self.mode() == SOCKET:
             self.sock.shutdown(socket.SHUT_WR)
         else:
-            os.close(self.wfd)
+            if not os.isatty(self.wfd):     # pipes can be closed harmlessly
+                os.close(self.wfd)
+            # for pty, close master fd in Mac won't cause slave fd input/output error, so let's do it!
+            elif platform.system() == 'Darwin':
+                os.close(self.wfd)
+            else:       # assume Linux here
+                # according to http://linux.die.net/man/3/cfmakeraw
+                # set min = 0 and time > 0, will cause read timeout and return 0 to indicate EOF
+                # but the tricky thing here is, if child read is invoked before this
+                # it will still block forever, so you have to call end before that happens
+                mode = tty.tcgetattr(self.wfd)[:]
+                mode[tty.CC][tty.VMIN] = 0
+                mode[tty.CC][tty.VTIME] = 1
+                tty.tcsetattr(self.wfd, tty.TCSAFLUSH, mode)
+                if force_close:
+                    time.sleep(self.close_delay)
+                    os.close(self.wfd)  # might cause EIO (input/output error)! use force_close at your own risk
         return
 
     def close(self, force = True):
@@ -1377,7 +1405,7 @@ if __name__ == '__main__':
         test = sys.argv[1]
 
     if test == 'tty':
-        io = zio('tty')
+        io = zio('tty', stdin = TTY)
         io.interact()
     elif test == 'vim':
         io = zio('vim', stdin = TTY, write_delay = 0)
@@ -1390,9 +1418,21 @@ if __name__ == '__main__':
         io = zio('cat')
         io.writeline('hello zio')
         io.read_until('he')
+        io.writeline('I am a lovely cat')
+        io.read_until('I am')
+        io.interact()
+    elif test == 'cat-tty':
+        io = zio('cat', stdin = TTY)
+        io.writeline('hello zio')
+        io.read_until('he')
+        io.writeline('I am a lovely cat')
+        io.read_until('I am')
         io.interact()
     elif test == 'ssh':
         io = zio('ssh root@127.0.0.1', stdin = TTY)
+        io.interact()
+    elif test == 'ssh-pipe':
+        io = zio('ssh root@127.0.0.1')
         io.interact()
 
 # vi:set et ts=4 sw=4 ft=python :
