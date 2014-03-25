@@ -594,6 +594,7 @@ class zio(object):
                 # wfd for tty echo
                 rfdlist.append(self.wfd)
             while self.isalive():
+                if len(rfdlist) == 0: break
                 r, w, e = self.__select(rfdlist, [], [])
                 if self.wfd in r:          # handle tty echo back first if wfd is a tty
                     try:
@@ -602,10 +603,12 @@ class zio(object):
                     except OSError, e:
                         if e.errno != errno.EIO:
                             raise
-                    if data is not None:
+                    if data:
                         if output_filter: data = output_filter(data)
                         # already translated by tty, so don't wrap print_write anymore
                         stdout(data)
+                    else:
+                        rfdlist.remove(self.wfd)
                 if self.rfd in r:
                     try:
                         data = None
@@ -613,9 +616,11 @@ class zio(object):
                     except OSError, e:
                         if e.errno != errno.EIO:
                             raise
-                    if data is not None:
+                    if data:
                         if output_filter: data = output_filter(data)
                         stdout(self.print_read(data))
+                    else:
+                        rfdlist.remove(self.rfd)
                 if pty.STDIN_FILENO in r:
                     try:
                         data = None
@@ -637,12 +642,11 @@ class zio(object):
                             n = self._write(data)
                             data = data[n:]
                         if i != -1:
-                            self.end()
+                            self.end(force_close = True)
                             break
                     else:
-                        self.end()
+                        self.end(force_close = True)
                         rfdlist.remove(pty.STDIN_FILENO)
-                        break
             while True:
                 r, w, e = self.__select([self.rfd], [], [], timeout = self.close_delay)
                 if self.rfd in r:
