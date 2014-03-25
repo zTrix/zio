@@ -53,7 +53,7 @@ def COLORED(f, color = 'cyan', on_color = None, attrs = None): return lambda s :
 def REPR(s): return repr(str(s)) + '\r\n'
 def EVAL(s): return eval(s)     # don't pwn yourself!!!
 def HEX(s): return str(s).encode('hex') + '\r\n'
-def UNHEX(s): return s.decode('hex')
+def UNHEX(s): return s.strip().decode('hex')
 def RAW(s): return str(s)
 def NONE(s): return ''
 
@@ -564,7 +564,7 @@ class zio(object):
                             raise
                     if data is not None:
                         if input_filter: data = input_filter(data)
-                        i = data.rfind(escape_character)
+                        i = input_filter and -1 or data.rfind(escape_character)
                         if i != -1: data = data[:i]
                         try:
                             while data != b'' and self.isalive():
@@ -577,7 +577,8 @@ class zio(object):
             return
 
         self.buffer = str()
-        if os.isatty(pty.STDIN_FILENO):
+        # if input_filter is not none, we should let user do some line editing
+        if not input_filter and os.isatty(pty.STDIN_FILENO):
             mode = tty.tcgetattr(pty.STDIN_FILENO)  # mode will be restored after interact
             tty.setraw(pty.STDIN_FILENO)        # set to raw mode to pass all input thru, supporting apps as vim
         # here, enable cooked mode for process stdin
@@ -595,7 +596,10 @@ class zio(object):
                 rfdlist.append(self.wfd)
             while self.isalive():
                 if len(rfdlist) == 0: break
-                r, w, e = self.__select(rfdlist, [], [])
+                try:
+                    r, w, e = self.__select(rfdlist, [], [])
+                except KeyboardInterrupt:
+                    break
                 if self.wfd in r:          # handle tty echo back first if wfd is a tty
                     try:
                         data = None
@@ -632,7 +636,7 @@ class zio(object):
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
                     if data:
                         if input_filter: data = input_filter(data)
-                        i = data.rfind(escape_character)
+                        i = input_filter and -1 or data.rfind(escape_character)
                         if i != -1: data = data[:i]
                         if not os.isatty(self.wfd):     # we must do the translation when tty does not help
                             data = data.replace('\r', '\n')
@@ -665,7 +669,7 @@ class zio(object):
                 else:
                     break
         finally:
-            if os.isatty(pty.STDIN_FILENO):
+            if not input_filter and os.isatty(pty.STDIN_FILENO):
                 tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, mode)
             if os.isatty(self.wfd):
                 self.ttyraw(self.wfd)
