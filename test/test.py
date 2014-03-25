@@ -22,6 +22,7 @@ class Test(unittest.TestCase):
         io = zio(cmd, **kwargs)
         yield io
         io.close()
+        print '"%s" exited: ' % cmd, io.exit_code
     
         for _ in range(16):
             port = random.randint(31337, 65530)

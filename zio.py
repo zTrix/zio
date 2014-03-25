@@ -100,7 +100,7 @@ class zio(object):
      
         self.flag_eof = False
         self.closed = True
-        self.terminated = True
+        self.exit_code = None
 
         self.ignorecase = ignorecase
 
@@ -116,7 +116,6 @@ class zio(object):
         # spawn process below
         self.pid = None
 
-        self.terminated = False
         self.closed = False
 
         if isinstance(target, type('')):
@@ -394,7 +393,7 @@ class zio(object):
             time.sleep(self.terminate_delay)
             if not self.isalive():
                 return True
-            self.kill(signal.SIGINT)
+            self.kill(signal.SIGINT)        # SIGTERM is nearly identical to SIGINT
             time.sleep(self.terminate_delay)
             if not self.isalive():
                 return True
@@ -439,36 +438,30 @@ class zio(object):
             pid, status = os.waitpid(self.pid, 0)
         else:
             raise Exception('Cannot wait for dead child process.')
-        self.exitstatus = os.WEXITSTATUS(status)
+        self.exit_code = os.WEXITSTATUS(status)
         if os.WIFEXITED(status):
-            self.status = status
-            self.exitstatus = os.WEXITSTATUS(status)
-            self.signalstatus = None
-            self.terminated = True
+            self.exit_code = os.WEXITSTATUS(status)
         elif os.WIFSIGNALED(status):
-            self.status = status
-            self.exitstatus = None
-            self.signalstatus = os.WTERMSIG(status)
-            self.terminated = True
+            self.exit_code = os.WTERMSIG(status)
         elif os.WIFSTOPPED(status):
             # You can't call wait() on a child process in the stopped state.
             raise Exception('Called wait() on a stopped child ' +
                     'process. This is not supported. Is some other ' +
                     'process attempting job control with our child pid?')
-        return self.exitstatus
+        return self.exit_code
 
     def isalive(self):
 
         '''This tests if the child process is running or not. This is
         non-blocking. If the child was terminated then this will read the
-        exitstatus or signalstatus of the child. This returns True if the child
+        exit code or signalstatus of the child. This returns True if the child
         process appears to be running or False if not. It can take literally
         SECONDS for Solaris to return the right status. '''
 
         if self.mode() == SOCKET:
             return not self.flag_eof
 
-        if self.terminated:
+        if self.exit_code is not None:
             return False
 
         if self.flag_eof:
@@ -523,15 +516,9 @@ class zio(object):
             return True
 
         if os.WIFEXITED(status):
-            self.status = status
-            self.exitstatus = os.WEXITSTATUS(status)
-            self.signalstatus = None
-            self.terminated = True
+            self.exit_code = os.WEXITSTATUS(status)
         elif os.WIFSIGNALED(status):
-            self.status = status
-            self.exitstatus = None
-            self.signalstatus = os.WTERMSIG(status)
-            self.terminated = True
+            self.exit_code = os.WTERMSIG(status)
         elif os.WIFSTOPPED(status):
             raise Exception('isalive() encountered condition ' +
                     'where child process is stopped. This is not ' +
@@ -762,6 +749,9 @@ class zio(object):
             return ret
 
     def end(self, force_close = False):
+        '''
+        end of writing stream, but we can still read
+        '''
         if self.mode() == SOCKET:
             self.sock.shutdown(socket.SHUT_WR)
         else:
@@ -785,15 +775,16 @@ class zio(object):
         return
 
     def close(self, force = True):
+        '''
+        close and clean up, nothing can and should be done after closing
+        '''
         if self.closed:
             return
         if self.mode() == 'socket':
             if self.sock:
                 self.sock.close()
             self.sock = None
-            self.flag_eof = True
         else:
-            self.flush()
             try:
                 os.close(self.wfd)
             except:
@@ -803,8 +794,9 @@ class zio(object):
             if self.isalive():
                 if not self.terminate(force):
                     raise Exception('Could not terminate child process')
-            self.rfd = -1
-            self.wfd = -1
+        self.flag_eof = True
+        self.rfd = -1
+        self.wfd = -1
         self.closed = True
 
     def read(self, size = None):
