@@ -168,8 +168,9 @@ class zio(object):
             # self.__pty_make_controlling_tty(stdout_slave_fd)
 
             try:
-                # self.setwinsize(sys.stdout.fileno(), 24, 80)     # note that this may not be successful
-                pass
+                if os.isatty(stdout_slave_fd):
+                    h, w = self.getwinsize(0)
+                    self.setwinsize(stdout_slave_fd, h, w)     # note that this may not be successful
             except BaseException, ex:
                 # TODO: write log in current directory
                 # if self.print_log: log('[ WARN ] setwinsize exception: %s' % (str(ex)), 'yellow')
@@ -335,14 +336,14 @@ class zio(object):
         s = struct.pack('HHHH', rows, cols, 0, 0)
         fcntl.ioctl(fd, TIOCSWINSZ, s)
 
-    def getwinsize(self):
+    def getwinsize(self, fd):
 
         '''This returns the terminal window size of the child tty. The return
         value is a tuple of (rows, cols). '''
 
         TIOCGWINSZ = getattr(termios, 'TIOCGWINSZ', 1074295912)
         s = struct.pack('HHHH', 0, 0, 0, 0)
-        x = fcntl.ioctl(self.fileno(), TIOCGWINSZ, s)
+        x = fcntl.ioctl(fd, TIOCGWINSZ, s)
         return struct.unpack('HHHH', x)[0:2]
 
     def __str__(self):
