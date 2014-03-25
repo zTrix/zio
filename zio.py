@@ -879,9 +879,11 @@ class zio(object):
         except TypeError:
             self._pattern_type_err(pattern_list)
         pattern_list = [prepare_pattern(p) for p in pattern_list]
-        return self.read_loop(searcher_string(pattern_list),
-                timeout, searchwindowsize)
-
+        matched = self.read_loop(searcher_string(pattern_list), timeout, searchwindowsize)
+        ret = self.before 
+        if isinstance(self.after, basestring):
+            ret += self.after
+        return ret          # be compatible with telnetlib.read_until
 
     def read_loop(self, searcher, timeout=-1, searchwindowsize = None):
 
