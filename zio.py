@@ -12,7 +12,7 @@ except:
     def colored(text, color=None, on_color=None, attrs=None):
         return text
 
-__ALL__ = ['stdout', 'log', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'HEX', 'RAW', 'COLORED', 'PIPE', 'TTY']
+__ALL__ = ['stdout', 'log', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'HEX', 'EVAL', 'UNHEX', 'RAW', 'NONE', 'COLORED', 'PIPE', 'TTY']
 
 def stdout(s, color = None, on_color = None, attrs = None):
     if not color:
@@ -50,9 +50,12 @@ PIPE = 'PIPE'
 TTY = 'tty'
 
 def COLORED(f, color = 'cyan', on_color = None, attrs = None): return lambda s : colored(f(s), color, on_color, attrs)
-def REPR(s): return repr(str(s)) + '\n'
-def HEX(s): return str(s).encode('hex')
+def REPR(s): return repr(str(s)) + '\r\n'
+def EVAL(s): return eval(s)     # don't pwn yourself!!!
+def HEX(s): return str(s).encode('hex') + '\r\n'
+def UNHEX(s): return s.decode('hex')
 def RAW(s): return str(s)
+def NONE(s): return ''
 
 class zio(object):
 
@@ -79,7 +82,9 @@ class zio(object):
         self.print_read = print_read
         self.print_write = print_write
         if self.print_read == True: self.print_read = RAW
+        if self.print_read == False: self.print_read = NONE
         if self.print_write == True: self.print_write = RAW
+        if self.print_write == False: self.print_write = NONE
         assert not self.print_read or callable(self.print_read)
         assert not self.print_write or callable(self.print_write)
 
@@ -168,7 +173,7 @@ class zio(object):
                 # self.__pty_make_controlling_tty(stdout_slave_fd)
 
             try:
-                if os.isatty(stdout_slave_fd):
+                if os.isatty(stdout_slave_fd) and os.isatty(pty.STDIN_FILENO):
                     h, w = self.getwinsize(0)
                     self.setwinsize(stdout_slave_fd, h, w)     # note that this may not be successful
             except BaseException, ex:
@@ -235,6 +240,8 @@ class zio(object):
             os.close(stdout_slave_fd)
             if gc_enabled:
                 gc.enable()
+
+            time.sleep(self.close_delay)
 
     def __pty_make_controlling_tty(self, tty_fd):
         '''This makes the pseudo-terminal the controlling tty. This should be
@@ -543,7 +550,7 @@ class zio(object):
                         data = self._read(1024)
                         if data:
                             if output_filter: data = output_filter(data)
-                            os.write(pty.STDOUT_FILENO, data)
+                            stdout(self.print_read(data))
                     except EOF:
                         self.flag_eof = True
                         break
@@ -570,8 +577,9 @@ class zio(object):
             return
 
         self.buffer = str()
-        mode = tty.tcgetattr(pty.STDIN_FILENO)  # mode will be restored after interact
-        tty.setraw(pty.STDIN_FILENO)        # set to raw mode to pass all input thru, supporting apps as vim
+        if os.isatty(pty.STDIN_FILENO):
+            mode = tty.tcgetattr(pty.STDIN_FILENO)  # mode will be restored after interact
+            tty.setraw(pty.STDIN_FILENO)        # set to raw mode to pass all input thru, supporting apps as vim
         # here, enable cooked mode for process stdin
         # but we should only enable for those who need cooked mode, not stuff like vim
         # we just do a simple detection here
@@ -581,11 +589,11 @@ class zio(object):
                 tty.tcsetattr(self.wfd, tty.TCSAFLUSH, self._wfd_init_mode)
 
         try:
+            rfdlist = [self.rfd, pty.STDIN_FILENO]
+            if os.isatty(self.wfd):
+                # wfd for tty echo
+                rfdlist.append(self.wfd)
             while self.isalive():
-                rfdlist = [self.rfd, pty.STDIN_FILENO]
-                if os.isatty(self.wfd):
-                    # wfd for tty echo
-                    rfdlist.append(self.wfd)
                 r, w, e = self.__select(rfdlist, [], [])
                 if self.wfd in r:          # handle tty echo back first if wfd is a tty
                     try:
@@ -596,7 +604,8 @@ class zio(object):
                             raise
                     if data is not None:
                         if output_filter: data = output_filter(data)
-                        os.write(pty.STDOUT_FILENO, data)
+                        # already translated by tty, so don't wrap print_write anymore
+                        stdout(data)
                 if self.rfd in r:
                     try:
                         data = None
@@ -606,7 +615,7 @@ class zio(object):
                             raise
                     if data is not None:
                         if output_filter: data = output_filter(data)
-                        os.write(pty.STDOUT_FILENO, data)
+                        stdout(self.print_read(data))
                 if pty.STDIN_FILENO in r:
                     try:
                         data = None
@@ -615,20 +624,25 @@ class zio(object):
                         # the subprocess may have closed before we get to reading it
                         if e.errno != errno.EIO:
                             raise
-                    if data is not None:
+                    # in BSD, you can still read '' from rfd, so never use `data is not None` here
+                    if data:
                         if input_filter: data = input_filter(data)
                         i = data.rfind(escape_character)
                         if i != -1: data = data[:i]
                         if not os.isatty(self.wfd):     # we must do the translation when tty does not help
                             data = data.replace('\r', '\n')
                             # also echo back by ourselves
-                            stdout(data)
+                            stdout(self.print_write(data))
                         while data != b'' and self.isalive():
                             n = self._write(data)
                             data = data[n:]
                         if i != -1:
                             self.end()
                             break
+                    else:
+                        self.end()
+                        rfdlist.remove(pty.STDIN_FILENO)
+                        break
             while True:
                 r, w, e = self.__select([self.rfd], [], [], timeout = self.close_delay)
                 if self.rfd in r:
@@ -641,13 +655,14 @@ class zio(object):
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
                     if data:
                         if output_filter: data = output_filter(data)
-                        os.write(pty.STDOUT_FILENO, data)
+                        stdout(self.print_read(data))
                     else:
                         break
                 else:
                     break
         finally:
-            tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, mode)
+            if os.isatty(pty.STDIN_FILENO):
+                tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, mode)
             if os.isatty(self.wfd):
                 self.ttyraw(self.wfd)
 
@@ -1426,7 +1441,7 @@ examples:
 def cmdline():
     import getopt
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'hi:o:t:', ['help', 'stdin', 'stdout', 'timeout'])
+        opts, args = getopt.getopt(sys.argv[1:], 'hi:o:t:r:w:d:', ['help', 'stdin', 'stdout', 'timeout', 'read', 'write', 'decode'])
     except getopt.GetoptError, err:
         print str(err)
         usage()
@@ -1435,6 +1450,7 @@ def cmdline():
     kwargs = { 
         'stdin': 'tty'
     }
+    decode = None
     for o, a in opts:
         if o in ('-h', '--help'):
             usage()
@@ -1455,6 +1471,29 @@ def cmdline():
             except:
                 usage()
                 sys.exit(11)
+        elif o in ('-r', '--read'):
+            if a.lower() == 'hex':
+                kwargs['print_read'] = COLORED(HEX, 'yellow')
+            elif a.lower() == 'repr':
+                kwargs['print_read'] = COLORED(REPR, 'yellow')
+            elif a.lower() == 'none':
+                kwargs['print_read'] = NONE
+            else:
+                kwargs['print_read'] = RAW
+        elif o in ('-w', '--write'):
+            if a.lower() == 'hex':
+                kwargs['print_write'] = COLORED(HEX, 'cyan')
+            elif a.lower() == 'repr':
+                kwargs['print_write'] = COLORED(REPR, 'cyan')
+            elif a.lower() == 'none':
+                kwargs['print_write'] = NONE
+            else:
+                kwargs['print_write'] = RAW
+        elif o in ('-d', '--decode'):
+            if a.lower() == 'eval':
+                decode = EVAL
+            elif a.lower() == 'unhex':
+                decode = UNHEX
 
     target = None
     if len(args) == 2:
@@ -1471,7 +1510,7 @@ def cmdline():
             target = args
 
     io = zio(target, **kwargs)
-    io.interact()
+    io.interact(input_filter = decode)
 
 if __name__ == '__main__':
 
