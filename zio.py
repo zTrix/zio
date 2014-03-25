@@ -533,7 +533,10 @@ class zio(object):
         """
         if self.mode() == SOCKET:
             while self.isalive():
-                r, w, e = self.__select([self.rfd, pty.STDIN_FILENO], [], [])
+                try:
+                    r, w, e = self.__select([self.rfd, pty.STDIN_FILENO], [], [])
+                except KeyboardInterrupt:
+                    break
                 if self.rfd in r:
                     try:
                         data = None
@@ -556,10 +559,13 @@ class zio(object):
                         if input_filter: data = input_filter(data)
                         i = data.rfind(escape_character)
                         if i != -1: data = data[:i]
-                        while data != b'' and self.isalive():
-                            n = self._write(data)
-                            data = data[n:]
-                        if i != -1:
+                        try:
+                            while data != b'' and self.isalive():
+                                n = self._write(data)
+                                data = data[n:]
+                            if i != -1:
+                                break
+                        except:         # write error, may be socket.error, Broken pipe
                             break
             return
 
@@ -672,16 +678,9 @@ class zio(object):
 
     def mode(self):
         
-        def _check_host(host):
-            try:
-                socket.gethostbyname(host)
-                return True
-            except:
-                return False
-        
         if not hasattr(self, '_io_mode'):
             
-            if type(self.target) == tuple and len(self.target) == 2 and isinstance(self.target[1], (int, long)) and self.target[1] >= 0 and self.target[1] < 65536 and _check_host(self.target[0]):
+            if hostport_tuple(self.target):
                 self._io_mode = SOCKET
             else:
                 # TODO: add more check condition
@@ -1390,41 +1389,98 @@ def split_command_line(command_line):       # this piece of code comes from pexc
         arg_list.append(arg)
     return arg_list
 
+def hostport_tuple(target):
+    def _check_host(host):
+        try:
+            socket.gethostbyname(host)
+            return True
+        except:
+            return False
+    
+    return type(target) == tuple and len(target) == 2 and isinstance(target[1], (int, long)) and target[1] >= 0 and target[1] < 65536 and _check_host(target[0])
+
+def usage():
+    print """
+usage:
+
+    $ zio.py -h
+        you are reading this help message
+
+    $ zio.py [-t seconds] [-i [tty|pipe]] [-o [tty|pipe]] "cmdline -x opts and args"
+        spawning process and interact with it
+
+    $ zio.py [-t seconds] host port
+        zio becomes a netcat
+
+examples:
+
+    $ ./zio.py tty
+    $ ./zio.py cat
+    $ ./zio.py vim
+    $ ./zio.py ssh -p 22 root@127.0.0.1
+    $ ./zio.py xxd
+    $ ./zio.py 127.1 22                 # WOW! you can talk with sshd by hand!
+    $ ./zio.py -i pipe ssh root@127.1   # you must be crazy to do this!
+"""
+
+def cmdline():
+    import getopt
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], 'hi:o:t:', ['help', 'stdin', 'stdout', 'timeout'])
+    except getopt.GetoptError, err:
+        print str(err)
+        usage()
+        sys.exit(10)
+    
+    kwargs = { 
+        'stdin': 'tty'
+    }
+    for o, a in opts:
+        if o in ('-h', '--help'):
+            usage()
+            sys.exit(0)
+        elif o in ('-i', '--stdin'):
+            if a.lower() == TTY.lower():
+                kwargs['stdin'] = TTY
+            else:
+                kwargs['stdin'] = PIPE
+        elif o in ('-o', '--stdout'):
+            if a.lower() == PIPE.lower():
+                kwargs['stdout'] = PIPE
+            else:
+                kwargs['stdout'] = TTY
+        elif o in ('-t', '--timeout'):
+            try:
+                kwargs['timeout'] = int(a)
+            except:
+                usage()
+                sys.exit(11)
+
+    target = None
+    if len(args) == 2:
+        try:
+            port = int(args[1])
+            if hostport_tuple((args[0], port)):
+                target = (args[0], port)
+        except:
+            pass
+    if not target:
+        if len(args) == 1:
+            target = args[0]
+        else:
+            target = args
+
+    io = zio(target, **kwargs)
+    io.interact()
+
 if __name__ == '__main__':
 
-    test = 'tty'
     if len(sys.argv) >= 2:
         test = sys.argv[1]
+    else:
+        usage()
+        sys.exit(0)
 
-    if test == 'tty':
-        io = zio('tty', stdin = TTY)
-        io.interact()
-    elif test == 'vim':
-        io = zio('vim', stdin = TTY, write_delay = 0)
-        io.interact()
-    elif test == 'sleep-vim':
-        io = zio('vim', stdin = TTY, write_delay = 0)
-        time.sleep(2)
-        io.interact()
-    elif test == 'cat':
-        io = zio('cat')
-        io.writeline('hello zio')
-        io.read_until('he')
-        io.writeline('I am a lovely cat')
-        io.read_until('I am')
-        io.interact()
-    elif test == 'cat-tty':
-        io = zio('cat', stdin = TTY)
-        io.writeline('hello zio')
-        io.read_until('he')
-        io.writeline('I am a lovely cat')
-        io.read_until('I am')
-        io.interact()
-    elif test == 'ssh':
-        io = zio('ssh root@127.0.0.1', stdin = TTY)
-        io.interact()
-    elif test == 'ssh-pipe':
-        io = zio('ssh root@127.0.0.1')
-        io.interact()
+    cmdline()
 
 # vi:set et ts=4 sw=4 ft=python :
