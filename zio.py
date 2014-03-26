@@ -85,8 +85,8 @@ class zio(object):
             self.timeout = timeout
         else:
             self.timeout = 8
-        self.write_fd = -1          # the fd to write to, no matter subprocess or socket
-        self.read_fd = -1           # the fd to read from, no matter subprocess or socket
+        self.wfd = -1          # the fd to write to, no matter subprocess or socket
+        self.rfd = -1           # the fd to read from, no matter subprocess or socket
         self.exit_status = None     # subprocess exit status, for socket, should be 0 if closed normally, or others if exception occurred
         
         self.write_delay = write_delay     # the delay before writing data, pexcept said Linux don't like this to be below 30ms
@@ -105,12 +105,9 @@ class zio(object):
         self.buffer = str()
 
         if self.mode() == SOCKET:
-            #TODO: udp support ?
             self.sock = socket.create_connection(self.target, self.timeout)
             self.name = '<socket ' + self.target[0] + ':' + str(self.target[1]) + '>'
-            # yeah, its not fd, but let's call it a fd though
-            self.read_fd = self.sock
-            self.write_fd = self.sock
+            self.rfd = self.wfd = self.sock.fileno()
         else:
             self.pid = None
             self._spawn(target)
@@ -223,16 +220,16 @@ class zio(object):
 
         else:
             # after fork, parent
-            self.write_fd = p2cwrite
+            self.wfd = p2cwrite
 
             # there is no way to eliminate controlling characters in tcattr
             # so we have to set raw mode here now
-            self._write_fd_init_mode = tty.tcgetattr(self.write_fd)[:]
-            self.ttyraw_with_echo(self.write_fd)
-            self._write_fd_raw_mode = tty.tcgetattr(self.write_fd)[:]
+            self._wfd_init_mode = tty.tcgetattr(self.wfd)[:]
+            self.ttyraw_with_echo(self.wfd)
+            self._wfd_raw_mode = tty.tcgetattr(self.wfd)[:]
 
             os.close(p2cread)
-            self.read_fd = master_fd
+            self.rfd = master_fd
             os.close(slave_fd)
             if gc_enabled:
                 gc.enable()
@@ -313,7 +310,7 @@ class zio(object):
         if self.mode() == SOCKET:
             return self.sock.fileno()
         else:
-            return self.read_fd
+            return self.rfd
 
     def setwinsize(self, fd, rows, cols):   # from pexpect, thanks!
 
@@ -353,8 +350,8 @@ class zio(object):
         ret = ['io-type: %s' % self.mode(), 
                'name: %s' % self.name, 
                'timeout: %f' % self.timeout,
-               'write-fd: %d' % (isinstance(self.write_fd, (int, long)) and self.write_fd or self.fileno()),
-               'read-fd: %d' % (isinstance(self.read_fd, (int, long)) and self.read_fd or self.fileno()),
+               'write-fd: %d' % (isinstance(self.wfd, (int, long)) and self.wfd or self.fileno()),
+               'read-fd: %d' % (isinstance(self.rfd, (int, long)) and self.rfd or self.fileno()),
                'buffer(last 100 chars): %r' % (self.buffer[-100:]),
                'eof: %s' % self.flag_eof]
         if self.mode() == SOCKET:
@@ -543,12 +540,12 @@ class zio(object):
     def interact(self, escape_character=chr(29), input_filter = None, output_filter = None):
         """
         when stdin is passed using os.pipe, backspace key will not work as expected, 
-        if write_fd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so I choose to translate 0x7f to ^H by default, by setting input_filter = lambda x: x.replace('\x7f', '\x08')
+        if wfd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so I choose to translate 0x7f to ^H by default, by setting input_filter = lambda x: x.replace('\x7f', '\x08')
         """
         if self.mode() == SOCKET:
             while self.isalive():
-                r, w, e = self.__select([self.read_fd, pty.STDIN_FILENO], [], [])
-                if self.read_fd in r:
+                r, w, e = self.__select([self.rfd, pty.STDIN_FILENO], [], [])
+                if self.rfd in r:
                     try:
                         data = None
                         data = self._read(1024)
@@ -583,28 +580,28 @@ class zio(object):
         # here, enable cooked mode for process stdin
         # but we should only enable for those who need cooked mode, not stuff like vim
         # we just do a simple detection here
-        wfd_mode = tty.tcgetattr(self.write_fd)
-        if wfd_mode == self._write_fd_raw_mode:     # if untouched by forked child
-            tty.tcsetattr(self.write_fd, tty.TCSAFLUSH, self._write_fd_init_mode)
+        wfd_mode = tty.tcgetattr(self.wfd)
+        if wfd_mode == self._wfd_raw_mode:     # if untouched by forked child
+            tty.tcsetattr(self.wfd, tty.TCSAFLUSH, self._wfd_init_mode)
 
         try:
             while self.isalive():
-                # write_fd for tty echo
-                r, w, e = self.__select([self.read_fd, pty.STDIN_FILENO, self.write_fd], [], [])
-                if self.write_fd in r:          # handle tty echo first
+                # wfd for tty echo
+                r, w, e = self.__select([self.rfd, pty.STDIN_FILENO, self.wfd], [], [])
+                if self.wfd in r:          # handle tty echo first
                     try:
                         data = None
-                        data = os.read(self.write_fd, 1024)
+                        data = os.read(self.wfd, 1024)
                     except OSError, e:
                         if e.errno != errno.EIO:
                             raise
                     if data is not None:
                         if output_filter: data = output_filter(data)
                         os.write(pty.STDOUT_FILENO, data)
-                if self.read_fd in r:
+                if self.rfd in r:
                     try:
                         data = None
-                        data = os.read(self.read_fd, 1024)
+                        data = os.read(self.rfd, 1024)
                     except OSError, e:
                         if e.errno != errno.EIO:
                             raise
@@ -629,15 +626,15 @@ class zio(object):
                         if i != -1:
                             break
             while True:
-                r, w, e = self.__select([self.read_fd], [], [], timeout = self.close_delay)
-                if self.read_fd in r:
+                r, w, e = self.__select([self.rfd], [], [], timeout = self.close_delay)
+                if self.rfd in r:
                     try:
                         data = None
-                        data = os.read(self.read_fd, 1024)
+                        data = os.read(self.rfd, 1024)
                     except OSError, e:
                         if e.errno != errno.EIO:
                             raise
-                    # in BSD, you can still read '' from read_fd, so never use `data is not None` here
+                    # in BSD, you can still read '' from rfd, so never use `data is not None` here
                     if data:
                         if output_filter: data = output_filter(data)
                         os.write(pty.STDOUT_FILENO, data)
@@ -647,7 +644,7 @@ class zio(object):
                     break
         finally:
             tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, mode)
-            self.ttyraw_with_echo(self.write_fd)
+            self.ttyraw_with_echo(self.wfd)
 
     def flush(self):
         """
@@ -659,7 +656,7 @@ class zio(object):
         '''This returns True if the file descriptor is open and connected to a
         tty(-like) device, else False. '''
 
-        return os.isatty(self.read_fd)
+        return os.isatty(self.rfd)
 
     def ttyraw_with_echo(self, fd):
         mode = tty.tcgetattr(fd)[:]
@@ -723,9 +720,6 @@ class zio(object):
                     # this actually is an exception.
                     raise
 
-    def _not_impl(self):
-        raise NotImplementedError("Not Implemented")
-
     def writelines(self, sequence):
         n = 0
         for s in sequence:
@@ -747,7 +741,7 @@ class zio(object):
 
             if not isinstance(s, bytes): s = s.encode('utf-8')
 
-            ret = os.write(self.write_fd, s)
+            ret = os.write(self.wfd, s)
 
             # don't use echo backed chars, because
             # 1. input/output will not be cleaner, I mean, they are always in a mess
@@ -757,14 +751,12 @@ class zio(object):
 
             return ret
 
-    def writeeof(self):
+    def end(self):
         if self.mode() == SOCKET:
             self.sock.shutdown(SHUT_WR)
         else:
-            os.close(self.write_fd)
+            os.close(self.wfd)
         return
-
-    write_eof = writeeof
 
     def close(self, force = True):
         if self.closed:
@@ -777,16 +769,16 @@ class zio(object):
         else:
             self.flush()
             try:
-                os.close(self.write_fd)
+                os.close(self.wfd)
             except:
                 pass    # may already closed in write_eof
-            os.close(self.read_fd)
+            os.close(self.rfd)
             time.sleep(self.close_delay)
             if self.isalive():
                 if not self.terminate(force):
                     raise Exception('Could not terminate child process')
-            self.read_fd = -1
-            self.write_fd = -1
+            self.rfd = -1
+            self.wfd = -1
         self.closed = True
 
     def read(self, size = None):
@@ -804,7 +796,7 @@ class zio(object):
         return self.before
 
     def readable(self):
-        return self.__select([self.read_fd], [], [], 0) == ([self.read_fd], [], [])
+        return self.__select([self.rfd], [], [], 0) == ([self.rfd], [], [])
 
     def readline(self, size = -1):
         if size == 0:
@@ -984,7 +976,7 @@ class zio(object):
 
     def _read(self, size):
         if self.mode() == PROCESS:
-            return os.read(self.read_fd, size)
+            return os.read(self.rfd, size)
         else:
             try:
                 return self.sock.recv(size)
@@ -995,7 +987,7 @@ class zio(object):
 
     def _write(self, s):
         if self.mode() == PROCESS:
-            return os.write(self.write_fd, s)
+            return os.write(self.wfd, s)
         else:
             self.sock.sendall(s)
             return len(s)
@@ -1033,7 +1025,7 @@ class zio(object):
         # If isalive() is false, then I pretend that this is the same as EOF.
         if not self.isalive():
             # timeout of 0 means "poll"
-            r, w, e = self.__select([self.read_fd], [], [], 0)
+            r, w, e = self.__select([self.rfd], [], [], 0)
             if not r:
                 self.flag_eof = True
                 raise EOF('End Of File (EOF). Braindead platform.')
@@ -1043,12 +1035,12 @@ class zio(object):
         else:
             end_time = float('inf')
 
-        readfds = [self.read_fd]
+        readfds = [self.rfd]
 
         if self.mode() == PROCESS:
             try:
-                os.fstat(self.write_fd)
-                readfds.append(self.write_fd)
+                os.fstat(self.wfd)
+                readfds.append(self.wfd)
             except:
                 pass
 
@@ -1071,14 +1063,14 @@ class zio(object):
 
             if self.mode() == PROCESS:
                 try:
-                    if self.write_fd in r:
-                        data = os.read(self.write_fd, 1024)
+                    if self.wfd in r:
+                        data = os.read(self.wfd, 1024)
                         if self.print_read and data: stdout(self.print_read(data))
                 except OSError, err:
-                    # write_fd read EOF (echo back)
+                    # wfd read EOF (echo back)
                     pass
 
-            if self.read_fd in r:
+            if self.rfd in r:
                 try:
                     s = self._read(size)
                     if self.print_read and s: stdout(self.print_read(s))
@@ -1095,6 +1087,9 @@ class zio(object):
 
         raise TIMEOUT('Timeout exceeded. size to read: %d' % size)
         # raise Exception('Reached an unexpected state, timeout = %d' % (timeout))
+
+    def _not_impl(self):
+        raise NotImplementedError("Not Implemented")
 
     # apis below
     read_after = read_before = read_between = read_range = _not_impl
