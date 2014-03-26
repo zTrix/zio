@@ -81,7 +81,7 @@ class Test(unittest.TestCase):
 
     def test_xxd(self):
         print ''
-        io = zio('xxd', print_write = False)
+        io = zio('xxd', print_write = COLORED(REPR), print_read = COLORED(RAW, 'yellow'))
         io.write(''.join([chr(x) for x in range(0, 256)]) + '\n')
         io.writeeof()
         out = io.read()

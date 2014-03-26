@@ -12,7 +12,7 @@ except:
     def colored(text, color=None, on_color=None, attrs=None):
         return text
 
-__ALL__ = ['stdout', 'log', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS']
+__ALL__ = ['stdout', 'log', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'HEX', 'RAW', 'COLORED']
 
 def stdout(s, color = None, on_color = None, attrs = None):
     if not color:
@@ -39,7 +39,7 @@ def b64(i): return isinstance(i, (int, long)) and struct.pack('>Q', i % (1<<64))
 
 class EOF(Exception):
     """Raised when EOF is read from child or socket.
-    This usually means the child has exited or socket closed"""
+    This usually means the child has exited or socket shutdown at remote end"""
 
 class TIMEOUT(Exception):
     """Raised when a read timeout exceeds the timeout. """
@@ -47,14 +47,15 @@ class TIMEOUT(Exception):
 SOCKET = 'socket'
 PROCESS = 'process'
 
+def COLORED(f, color = 'cyan', on_color = None, attrs = None): return lambda s : colored(f(s), color, on_color, attrs)
+def REPR(s): return repr(str(s)) + '\n'
+def HEX(s): return str(s).encode('hex')
+def RAW(s): return str(s)
+
 class zio(object):
 
-    def repr(s): return repr(str(s))[1:-1]
-    def hex(s): return str(s).encode('hex')
-    def raw(s): return s
-
     # TODO: logfile support ?
-    def __init__(self, target, print_read = True, print_write = True, print_log = True, timeout = 10, cwd = None, env = None, sighup = signal.SIG_IGN, write_delay = 0.05, ignorecase = False):
+    def __init__(self, target, print_read = RAW, print_write = RAW, timeout = 8, cwd = None, env = None, sighup = signal.SIG_IGN, write_delay = 0.05, ignorecase = False):
         """
         zio is an easy-to-use io library for pwning test/poc, currently zio supports process io and tcp socket
 
@@ -67,7 +68,6 @@ class zio(object):
         params:
             print_read = bool, if true, print all the data read from target
             print_write = bool, if true, print all the data sent out
-            print_log = bool, if true, print the zio log file
         """
 
         if not target:
@@ -76,7 +76,10 @@ class zio(object):
         self.target = target
         self.print_read = print_read
         self.print_write = print_write
-        self.print_log = print_log
+        if self.print_read == True: self.print_read = RAW
+        if self.print_write == True: self.print_write = RAW
+        assert not self.print_read or callable(self.print_read)
+        assert not self.print_write or callable(self.print_write)
 
         if isinstance(timeout, (int, long)) and timeout > 0:
             self.timeout = timeout
@@ -171,7 +174,8 @@ class zio(object):
                 # self.setwinsize(sys.stdout.fileno(), 24, 80)     # note that this may not be successful
                 pass
             except BaseException, ex:
-                if self.print_log: log('[ WARN ] setwinsize exception: %s' % (str(ex)), 'yellow')
+                # TODO: write log in current directory
+                # if self.print_log: log('[ WARN ] setwinsize exception: %s' % (str(ex)), 'yellow')
                 pass
 
             # Dup fds for child
@@ -732,8 +736,9 @@ class zio(object):
         return self.write(s + os.linesep)
 
     def write(self, s):
+        if not s: return 0
         if self.mode() == SOCKET:
-            if self.print_write: stdout(s)
+            if self.print_write: stdout(self.print_write(s))
             self.sock.sendall(s)
             return len(s)
         elif self.mode() == PROCESS:
@@ -744,16 +749,11 @@ class zio(object):
 
             ret = os.write(self.write_fd, s)
 
-            r, w, e = self.__select([self.write_fd], [], [], self.write_delay + 0.01)
-
-            try:
-                if r and self.write_fd in r:
-                    data = os.read(self.write_fd, 1024)
-                    if self.print_write and data:
-                        n = os.write(pty.STDOUT_FILENO, data)
-            except OSError, err:
-                # write_fd got EOF
-                pass
+            # don't use echo backed chars, because
+            # 1. input/output will not be cleaner, I mean, they are always in a mess
+            # 2. this is a unified interface for pipe/tty write
+            # 3. echo back characters will translate control chars into ^@ ^A ^B ^C, ah, ugly!
+            if self.print_write: stdout(self.print_write(s))
 
             return ret
 
@@ -1073,8 +1073,7 @@ class zio(object):
                 try:
                     if self.write_fd in r:
                         data = os.read(self.write_fd, 1024)
-                        if self.print_read and data:
-                            n = os.write(pty.STDOUT_FILENO, data)
+                        if self.print_read and data: stdout(self.print_read(data))
                 except OSError, err:
                     # write_fd read EOF (echo back)
                     pass
@@ -1082,7 +1081,7 @@ class zio(object):
             if self.read_fd in r:
                 try:
                     s = self._read(size)
-                    if self.print_read and s: os.write(pty.STDOUT_FILENO, s)
+                    if self.print_read and s: stdout(self.print_read(s))
                 except OSError:
                     # Linux does this
                     self.flag_eof = True
