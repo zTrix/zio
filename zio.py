@@ -12,7 +12,7 @@ except:
     def colored(text, color=None, on_color=None, attrs=None):
         return text
 
-__ALL__ = ['stdout', 'log', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'HEX', 'RAW', 'COLORED']
+__ALL__ = ['stdout', 'log', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'HEX', 'RAW', 'COLORED', 'PIPE', 'TTY']
 
 def stdout(s, color = None, on_color = None, attrs = None):
     if not color:
@@ -46,6 +46,8 @@ class TIMEOUT(Exception):
 
 SOCKET = 'socket'
 PROCESS = 'process'
+PIPE = 'PIPE'
+TTY = 'tty'
 
 def COLORED(f, color = 'cyan', on_color = None, attrs = None): return lambda s : colored(f(s), color, on_color, attrs)
 def REPR(s): return repr(str(s)) + '\n'
@@ -57,7 +59,7 @@ class zio(object):
     # TODO: logfile support ?
     def __init__(self, target, print_read = RAW, print_write = RAW, timeout = 8, cwd = None, env = None, sighup = signal.SIG_IGN, write_delay = 0.05, ignorecase = False):
         """
-        zio is an easy-to-use io library for pwning test/poc, currently zio supports process io and tcp socket
+        zio is an easy-to-use io library for pwning development, supporting an unified interface for local process pwning and remote tcp socket io
 
         example:
 
@@ -135,8 +137,8 @@ class zio(object):
         assert self.pid is None, 'pid must be None, to prevent double spawn'
         assert self.command is not None, 'The command to be spawn must not be None'
 
-        master_fd, slave_fd = pty.openpty()
-        if master_fd < 0 or slave_fd < 0:
+        stdout_master_fd, stdout_slave_fd = pty.openpty()
+        if stdout_master_fd < 0 or stdout_slave_fd < 0:
             raise Exception('Could not openpty for stdout/stderr')
 
         # use another pty for stdin because we don't want our input to be echoed back in stdout
@@ -144,8 +146,8 @@ class zio(object):
         # echo will be switched on again
         # and dont use os.pipe either, because many thing weired will happen, such as baskspace not working, ssh lftp command hang
 
-        p2cwrite, p2cread = pty.openpty() # p2cread, p2cwrite = self.pipe_cloexec()
-        if p2cwrite < 0 or p2cread < 0:
+        stdin_master_fd, stdin_slave_fd = pty.openpty() # stdin_slave_fd, stdin_master_fd = self.pipe_cloexec()
+        if stdin_master_fd < 0 or stdin_slave_fd < 0:
             raise Exception('Could not openpty for stdin')
 
         gc_enabled = gc.isenabled()
@@ -162,10 +164,10 @@ class zio(object):
         if self.pid < 0:
             raise Exception('failed to fork')
         elif self.pid == 0:     # Child
-            os.close(master_fd)
+            os.close(stdout_master_fd)
 
-            self.__pty_make_controlling_tty(p2cread)
-            # self.__pty_make_controlling_tty(slave_fd)
+            self.__pty_make_controlling_tty(stdin_slave_fd)
+            # self.__pty_make_controlling_tty(stdout_slave_fd)
 
             try:
                 # self.setwinsize(sys.stdout.fileno(), 24, 80)     # note that this may not be successful
@@ -186,17 +188,17 @@ class zio(object):
                     os.dup2(a, b)
 
             # redirect stdout and stderr to pty
-            os.dup2(slave_fd, pty.STDOUT_FILENO)
-            os.dup2(slave_fd, pty.STDERR_FILENO)
+            os.dup2(stdout_slave_fd, pty.STDOUT_FILENO)
+            os.dup2(stdout_slave_fd, pty.STDERR_FILENO)
 
-            # redirect stdin to p2cread instead of slave_fd, to prevent input echoed back
-            _dup2(p2cread, pty.STDIN_FILENO)
+            # redirect stdin to stdin_slave_fd instead of stdout_slave_fd, to prevent input echoed back
+            _dup2(stdin_slave_fd, pty.STDIN_FILENO)
 
-            if slave_fd > 2:
-                os.close(slave_fd)
+            if stdout_slave_fd > 2:
+                os.close(stdout_slave_fd)
 
-            if p2cwrite is not None:
-                os.close(p2cwrite)
+            if stdin_master_fd is not None:
+                os.close(stdin_master_fd)
 
             # do not allow child to inherit open file descriptors from parent
 
@@ -220,17 +222,17 @@ class zio(object):
 
         else:
             # after fork, parent
-            self.wfd = p2cwrite
+            self.wfd = stdin_master_fd
 
             # there is no way to eliminate controlling characters in tcattr
             # so we have to set raw mode here now
             self._wfd_init_mode = tty.tcgetattr(self.wfd)[:]
-            self.ttyraw_with_echo(self.wfd)
+            self.ttyraw(self.wfd)
             self._wfd_raw_mode = tty.tcgetattr(self.wfd)[:]
 
-            os.close(p2cread)
-            self.rfd = master_fd
-            os.close(slave_fd)
+            os.close(stdin_slave_fd)
+            self.rfd = stdout_master_fd
+            os.close(stdout_slave_fd)
             if gc_enabled:
                 gc.enable()
 
@@ -540,7 +542,7 @@ class zio(object):
     def interact(self, escape_character=chr(29), input_filter = None, output_filter = None):
         """
         when stdin is passed using os.pipe, backspace key will not work as expected, 
-        if wfd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so I choose to translate 0x7f to ^H by default, by setting input_filter = lambda x: x.replace('\x7f', '\x08')
+        if wfd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so you should choose the right input when using zio
         """
         if self.mode() == SOCKET:
             while self.isalive():
@@ -644,7 +646,7 @@ class zio(object):
                     break
         finally:
             tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, mode)
-            self.ttyraw_with_echo(self.wfd)
+            self.ttyraw(self.wfd)
 
     def flush(self):
         """
@@ -658,15 +660,18 @@ class zio(object):
 
         return os.isatty(self.rfd)
 
-    def ttyraw_with_echo(self, fd):
+    def ttyraw(self, fd, when = tty.TCSAFLUSH, echo = False):
         mode = tty.tcgetattr(fd)[:]
         mode[tty.IFLAG] = mode[tty.IFLAG] & ~(tty.BRKINT | tty.ICRNL | tty.INPCK | tty.ISTRIP | tty.IXON)
         mode[tty.CFLAG] = mode[tty.CFLAG] & ~(tty.CSIZE | tty.PARENB)
         mode[tty.CFLAG] = mode[tty.CFLAG] | tty.CS8
-        mode[tty.LFLAG] = mode[tty.LFLAG] & ~(tty.ICANON | tty.IEXTEN | tty.ISIG)
+        if echo:
+            mode[tty.LFLAG] = mode[tty.LFLAG] & ~(tty.ICANON | tty.IEXTEN | tty.ISIG)
+        else:
+            mode[tty.LFLAG] = mode[tty.LFLAG] & ~(tty.ECHO | tty.ICANON | tty.IEXTEN | tty.ISIG)
         mode[tty.CC][tty.VMIN] = 1
         mode[tty.CC][tty.VTIME] = 0
-        tty.tcsetattr(fd, tty.TCSAFLUSH, mode)
+        tty.tcsetattr(fd, when, mode)
 
     def seterase(self, fd, erase_char = chr(0x7f)):
         attr = termios.tcgetattr(fd)

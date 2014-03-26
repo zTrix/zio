@@ -73,6 +73,7 @@ class Test(unittest.TestCase):
         io.close()
 
     def test_http(self):
+        print ''
         io = zio(('ifconfig.me', 80))
         io.write('GET / HTTP/1.1\r\nHOST: ifconfig.me\r\nUser-Agent: curl\r\n\r\n')
         self.assertEqual(io.read(5), 'HTTP/', 'bad http start')
