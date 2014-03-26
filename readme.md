@@ -7,7 +7,7 @@
 
 [![Bitdeli Badge](https://d2weczhvl823v0.cloudfront.net/zTrix/zio/trend.png)](https://bitdeli.com/free "Bitdeli Badge")
 
-`zio` is an expect-like io library, modified from [pexpect](https://github.com/pexpect/pexpect).
+[zio](https://github.com/zTrix/zio) is an easy-to-use io library for pwning development, supporting an unified interface for local process pwning and remote tcp socket io
 
 ## Examples
     
@@ -21,8 +21,16 @@
 
 Just don't read '\n' or '\r', use readline() instead
 
+## Thanks (Also references)
+
+ - [pexpect](https://github.com/pexpect/pexpect)
+ - [sh](https://github.com/amoffat/sh)
+ - python subprocess module
+ - TTY related
+   - http://linux.die.net/man/3/cfmakeraw
+   - http://marcocorvi.altervista.org/games/lkpe/tty/tty.htm
+   - http://www.linusakesson.net/programming/tty/
+
 ## TODO
 
  - add attach_gdb function
- - handle Ctrl-V Ctrl-C signal
- - raw mode

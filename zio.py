@@ -346,7 +346,7 @@ class zio(object):
         return struct.unpack('HHHH', x)[0:2]
 
     def __str__(self):
-        ret = ['io-type: %s' % self.mode(), 
+        ret = ['io-mode: %s' % self.mode(), 
                'name: %s' % self.name, 
                'timeout: %f' % self.timeout,
                'write-fd: %d' % (isinstance(self.wfd, (int, long)) and self.wfd or self.fileno()),
@@ -669,11 +669,6 @@ class zio(object):
         mode[tty.CC][tty.VMIN] = 1
         mode[tty.CC][tty.VTIME] = 0
         tty.tcsetattr(fd, when, mode)
-
-    def seterase(self, fd, erase_char = chr(0x7f)):
-        attr = termios.tcgetattr(fd)
-        attr[6][termios.VERASE] = erase_char
-        termios.tcsetattr(fd, termios.TCSANOW, attr)
 
     def mode(self):
         
