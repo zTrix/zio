@@ -12,7 +12,7 @@ except:
     def colored(text, color=None, on_color=None, attrs=None):
         return text
 
-__ALL__ = ['stdout', 'log', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT']
+__ALL__ = ['stdout', 'log', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS']
 
 def stdout(s, color = None, on_color = None, attrs = None):
     if not color:
@@ -44,10 +44,10 @@ class EOF(Exception):
 class TIMEOUT(Exception):
     """Raised when a read timeout exceeds the timeout. """
 
-class zio(object):
+SOCKET = 'socket'
+PROCESS = 'process'
 
-    IO_SOCKET = 'socket'
-    IO_PROCESS = 'process'
+class zio(object):
 
     def repr(s): return repr(str(s))[1:-1]
     def hex(s): return str(s).encode('hex')
@@ -101,7 +101,7 @@ class zio(object):
 
         self.buffer = str()
 
-        if self.io_type() == 'socket':
+        if self.mode() == SOCKET:
             #TODO: udp support ?
             self.sock = socket.create_connection(self.target, self.timeout)
             self.name = '<socket ' + self.target[0] + ':' + str(self.target[1]) + '>'
@@ -306,7 +306,7 @@ class zio(object):
     def fileno(self):
         '''This returns the file descriptor of the pty for the child.
         '''
-        if self.io_type() == zio.IO_SOCKET:
+        if self.mode() == SOCKET:
             return self.sock.fileno()
         else:
             return self.read_fd
@@ -346,16 +346,16 @@ class zio(object):
         return struct.unpack('HHHH', x)[0:2]
 
     def __str__(self):
-        ret = ['io-type: %s' % self.io_type(), 
+        ret = ['io-type: %s' % self.mode(), 
                'name: %s' % self.name, 
                'timeout: %f' % self.timeout,
                'write-fd: %d' % (isinstance(self.write_fd, (int, long)) and self.write_fd or self.fileno()),
                'read-fd: %d' % (isinstance(self.read_fd, (int, long)) and self.read_fd or self.fileno()),
                'buffer(last 100 chars): %r' % (self.buffer[-100:]),
                'eof: %s' % self.flag_eof]
-        if self.io_type() == zio.IO_SOCKET:
+        if self.mode() == SOCKET:
             pass
-        elif self.io_type() == zio.IO_PROCESS:
+        elif self.mode() == PROCESS:
             ret.append('command: %s' % str(self.command))
             ret.append('args: %r' % (self.args,))
             ret.append('write-delay: %f' % self.write_delay)
@@ -376,7 +376,7 @@ class zio(object):
         returns True if the child was terminated. This returns False if the
         child could not be terminated. '''
 
-        if self.io_type() != zio.IO_PROCESS:
+        if self.mode() != PROCESS:
             # should I raise something?
             return
 
@@ -462,7 +462,7 @@ class zio(object):
         process appears to be running or False if not. It can take literally
         SECONDS for Solaris to return the right status. '''
 
-        if self.io_type() == zio.IO_SOCKET:
+        if self.mode() == SOCKET:
             return not self.flag_eof
 
         if self.terminated:
@@ -541,7 +541,7 @@ class zio(object):
         when stdin is passed using os.pipe, backspace key will not work as expected, 
         if write_fd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so I choose to translate 0x7f to ^H by default, by setting input_filter = lambda x: x.replace('\x7f', '\x08')
         """
-        if self.io_type() == zio.IO_SOCKET:
+        if self.mode() == SOCKET:
             while self.isalive():
                 r, w, e = self.__select([self.read_fd, pty.STDIN_FILENO], [], [])
                 if self.read_fd in r:
@@ -672,7 +672,7 @@ class zio(object):
         attr[6][termios.VERASE] = erase_char
         termios.tcsetattr(fd, termios.TCSANOW, attr)
 
-    def io_type(self):
+    def mode(self):
         
         def _check_host(host):
             try:
@@ -681,15 +681,15 @@ class zio(object):
             except:
                 return False
         
-        if not hasattr(self, '_io_type'):
+        if not hasattr(self, '_io_mode'):
             
             if type(self.target) == tuple and len(self.target) == 2 and isinstance(self.target[1], (int, long)) and self.target[1] >= 0 and self.target[1] < 65536 and _check_host(self.target[0]):
-                self._io_type = zio.IO_SOCKET
+                self._io_mode = SOCKET
             else:
                 # TODO: add more check condition
-                self._io_type = zio.IO_PROCESS
+                self._io_mode = PROCESS
 
-        return self._io_type
+        return self._io_mode
 
     def __select(self, iwtd, owtd, ewtd, timeout=None):
 
@@ -732,11 +732,11 @@ class zio(object):
         return self.write(s + os.linesep)
 
     def write(self, s):
-        if self.io_type() == zio.IO_SOCKET:
+        if self.mode() == SOCKET:
             if self.print_write: stdout(s)
             self.sock.sendall(s)
             return len(s)
-        elif self.io_type() == zio.IO_PROCESS:
+        elif self.mode() == PROCESS:
             #if not self.writable(): raise Exception('subprocess stdin not writable')
             time.sleep(self.write_delay)
 
@@ -758,7 +758,7 @@ class zio(object):
             return ret
 
     def writeeof(self):
-        if self.io_type() == zio.IO_SOCKET:
+        if self.mode() == SOCKET:
             self.sock.shutdown(SHUT_WR)
         else:
             os.close(self.write_fd)
@@ -769,7 +769,7 @@ class zio(object):
     def close(self, force = True):
         if self.closed:
             return
-        if self.io_type() == 'socket':
+        if self.mode() == 'socket':
             if self.sock:
                 self.sock.close()
             self.sock = None
@@ -809,7 +809,7 @@ class zio(object):
     def readline(self, size = -1):
         if size == 0:
             return str()
-        if self.io_type() == zio.IO_PROCESS:
+        if self.mode() == PROCESS:
             lineseps = [b'\r\n', EOF]
         else:
             lineseps = [b'\r\n', b'\n', EOF]
@@ -983,7 +983,7 @@ class zio(object):
         return compiled_pattern_list
 
     def _read(self, size):
-        if self.io_type() == zio.IO_PROCESS:
+        if self.mode() == PROCESS:
             return os.read(self.read_fd, size)
         else:
             try:
@@ -994,7 +994,7 @@ class zio(object):
                 raise err
 
     def _write(self, s):
-        if self.io_type() == zio.IO_PROCESS:
+        if self.mode() == PROCESS:
             return os.write(self.write_fd, s)
         else:
             self.sock.sendall(s)
@@ -1045,7 +1045,7 @@ class zio(object):
 
         readfds = [self.read_fd]
 
-        if self.io_type() == zio.IO_PROCESS:
+        if self.mode() == PROCESS:
             try:
                 os.fstat(self.write_fd)
                 readfds.append(self.write_fd)
@@ -1069,7 +1069,7 @@ class zio(object):
                 else:
                     continue
 
-            if self.io_type() == zio.IO_PROCESS:
+            if self.mode() == PROCESS:
                 try:
                     if self.write_fd in r:
                         data = os.read(self.write_fd, 1024)
