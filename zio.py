@@ -57,7 +57,7 @@ def RAW(s): return str(s)
 class zio(object):
 
     # TODO: logfile support ?
-    def __init__(self, target, print_read = RAW, print_write = RAW, timeout = 8, cwd = None, env = None, sighup = signal.SIG_IGN, write_delay = 0.05, ignorecase = False):
+    def __init__(self, target, stdin = TTY, stdout = TTY, print_read = RAW, print_write = RAW, timeout = 8, cwd = None, env = None, sighup = signal.SIG_IGN, write_delay = 0.05, ignorecase = False):
         """
         zio is an easy-to-use io library for pwning development, supporting an unified interface for local process pwning and remote tcp socket io
 
@@ -87,9 +87,9 @@ class zio(object):
             self.timeout = timeout
         else:
             self.timeout = 8
-        self.wfd = -1          # the fd to write to, no matter subprocess or socket
-        self.rfd = -1           # the fd to read from, no matter subprocess or socket
-        self.exit_status = None     # subprocess exit status, for socket, should be 0 if closed normally, or others if exception occurred
+
+        self.wfd = -1          # the fd to write to
+        self.rfd = -1           # the fd to read from
         
         self.write_delay = write_delay     # the delay before writing data, pexcept said Linux don't like this to be below 30ms
         self.close_delay = 0.1      # like pexcept, will used by close(), to give kernel time to update process status, time in seconds
@@ -110,15 +110,15 @@ class zio(object):
             self.sock = socket.create_connection(self.target, self.timeout)
             self.name = '<socket ' + self.target[0] + ':' + str(self.target[1]) + '>'
             self.rfd = self.wfd = self.sock.fileno()
-        else:
-            self.pid = None
-            self._spawn(target)
+            self.closed = False
+            return
+
+        # spawn process below
+        self.pid = None
 
         self.terminated = False
         self.closed = False
 
-    def _spawn(self, target):
-        
         if isinstance(target, type('')):
             self.args = split_command_line(target)
             self.command = self.args[0]
@@ -137,18 +137,16 @@ class zio(object):
         assert self.pid is None, 'pid must be None, to prevent double spawn'
         assert self.command is not None, 'The command to be spawn must not be None'
 
-        stdout_master_fd, stdout_slave_fd = pty.openpty()
-        if stdout_master_fd < 0 or stdout_slave_fd < 0:
-            raise Exception('Could not openpty for stdout/stderr')
+        stdout_master_fd, stdout_slave_fd = stdout == TTY and pty.openpty() or self.pipe_cloexec()
+        if stdout_master_fd < 0 or stdout_slave_fd < 0: raise Exception('Could not openpty for stdout/stderr')
 
         # use another pty for stdin because we don't want our input to be echoed back in stdout
         # set echo off does not help because in application like ssh, when you input the password
         # echo will be switched on again
         # and dont use os.pipe either, because many thing weired will happen, such as baskspace not working, ssh lftp command hang
 
-        stdin_master_fd, stdin_slave_fd = pty.openpty() # stdin_slave_fd, stdin_master_fd = self.pipe_cloexec()
-        if stdin_master_fd < 0 or stdin_slave_fd < 0:
-            raise Exception('Could not openpty for stdin')
+        stdin_master_fd, stdin_slave_fd = stdin == TTY and pty.openpty() or self.pipe_cloexec()
+        if stdin_master_fd < 0 or stdin_slave_fd < 0: raise Exception('Could not openpty for stdin')
 
         gc_enabled = gc.isenabled()
         # Disable gc to avoid bug where gc -> file_dealloc ->
@@ -205,7 +203,7 @@ class zio(object):
             max_fd = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
             os.closerange(3, max_fd)
 
-            if self.sighup:
+            if self.sighup:         # persist after parent process exits
                 signal.signal(signal.SIGHUP, self.sighup)
 
             if self.cwd is not None:
@@ -235,7 +233,6 @@ class zio(object):
             os.close(stdout_slave_fd)
             if gc_enabled:
                 gc.enable()
-
 
     def __pty_make_controlling_tty(self, tty_fd):
         '''This makes the pseudo-terminal the controlling tty. This should be
@@ -304,7 +301,7 @@ class zio(object):
         r, w = os.pipe()
         self._set_cloexec_flag(r)
         self._set_cloexec_flag(w)
-        return r, w
+        return w, r
 
     def fileno(self):
         '''This returns the file descriptor of the pty for the child.
@@ -758,7 +755,7 @@ class zio(object):
 
     def end(self):
         if self.mode() == SOCKET:
-            self.sock.shutdown(SHUT_WR)
+            self.sock.shutdown(socket.SHUT_WR)
         else:
             os.close(self.wfd)
         return
@@ -1387,10 +1384,10 @@ if __name__ == '__main__':
         io = zio('tty')
         io.interact()
     elif test == 'vim':
-        io = zio('vim', write_delay = 0)
+        io = zio('vim', stdin = TTY, write_delay = 0)
         io.interact()
     elif test == 'sleep-vim':
-        io = zio('vim', write_delay = 0)
+        io = zio('vim', stdin = TTY, write_delay = 0)
         time.sleep(2)
         io.interact()
     elif test == 'cat':
@@ -1399,20 +1396,7 @@ if __name__ == '__main__':
         io.read_until('he')
         io.interact()
     elif test == 'ssh':
-        io = zio('ssh root@127.0.0.1')
+        io = zio('ssh root@127.0.0.1', stdin = TTY)
         io.interact()
-    elif test == 'getpass':
-        f = open('/tmp/_test_getpass_zio.py', 'w')
-        f.write("\nimport getpass\n\nprint 'Welcome'\n\na = getpass.getpass('Password:')\n\nif a == 'pass':\n    print 'Logged in'\nelse:\n    print 'Invalid'\n\n")
-        f.close()
-        io = zio('python2 /tmp/_test_getpass_zio.py')
-        io.interact()
-    elif test == 'sock_cat':
-        import subprocess
-        p = subprocess.Popen(['socat', '-d', 'TCP-LISTEN:9999,reuseaddr,fork', 'exec:cat'])
-        time.sleep(0.5)
-        io = zio(('localhost', 9999))
-        io.interact()
-        p.kill()
 
 # vi:set et ts=4 sw=4 ft=python :
