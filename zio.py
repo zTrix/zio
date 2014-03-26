@@ -54,7 +54,7 @@ class zio(object):
     def raw(s): return s
 
     # TODO: logfile support ?
-    def __init__(self, target, print_read = True, print_write = True, print_log = True, timeout = 10, cwd = None, env = None, ignore_sighup = True, write_delay = 0.05, ignorecase = False):
+    def __init__(self, target, print_read = True, print_write = True, print_log = True, timeout = 10, cwd = None, env = None, sighup = signal.SIG_IGN, write_delay = 0.05, ignorecase = False):
         """
         zio is an easy-to-use io library for pwning test/poc, currently zio supports process io and tcp socket
 
@@ -91,7 +91,7 @@ class zio(object):
         self.terminate_delay = 0.1  # like close_delay
         self.cwd = cwd
         self.env = env
-        self.ignore_sighup = ignore_sighup
+        self.sighup = sighup
      
         self.flag_eof = False
         self.closed = True
@@ -202,8 +202,8 @@ class zio(object):
             max_fd = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
             os.closerange(3, max_fd)
 
-            if self.ignore_sighup:
-                signal.signal(signal.SIGHUP, signal.SIG_IGN)
+            if self.sighup:
+                signal.signal(signal.SIGHUP, self.sighup)
 
             if self.cwd is not None:
                 os.chdir(self.cwd)
@@ -765,33 +765,6 @@ class zio(object):
         return
 
     write_eof = writeeof
-
-    def writecontrol(self, char):
-
-        '''Helper method that wraps send() with mnemonic access for sending control
-        character to the child (such as Ctrl-C or Ctrl-D).  For example, to send
-        Ctrl-G (ASCII 7, bell, '\a')::
-
-            child.sendcontrol('g')
-
-        See also, sendintr() and sendeof().
-        '''
-
-        char = char.lower()
-        a = ord(char)
-        if a >= 97 and a <= 122:
-            a = a - ord('a') + 1
-            return self.write(chr(a))
-        d = {'@': 0, '`': 0,
-            '[': 27, '{': 27,
-            '\\': 28, '|': 28,
-            ']': 29, '}': 29,
-            '^': 30, '~': 30,
-            '_': 31,
-            '?': 127}
-        if char not in d:
-            return 0
-        return self.write(chr(d[char]))
 
     def close(self, force = True):
         if self.closed:
