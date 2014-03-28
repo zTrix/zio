@@ -552,7 +552,7 @@ class zio(object):
                         data = self._read(1024)
                         if data:
                             if output_filter: data = output_filter(data)
-                            stdout(self.print_read(data))
+                            stdout(data)
                     except EOF:
                         self.flag_eof = True
                         break
