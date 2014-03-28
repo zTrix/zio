@@ -45,6 +45,8 @@ io.interact()
 
 ## Document
 
+To be added... Please wait...
+
 ### about line break and carriage return
 
 Just don't read '\n' or '\r', use `readline()` instead

@@ -178,9 +178,7 @@ class zio(object):
                     h, w = self.getwinsize(0)
                     self.setwinsize(stdout_slave_fd, h, w)     # note that this may not be successful
             except BaseException, ex:
-                # TODO: write log in current directory
-                # if self.print_log: log('[ WARN ] setwinsize exception: %s' % (str(ex)), 'yellow')
-                pass
+                if self.debug: log('[ WARN ] setwinsize exception: %s' % (str(ex)), f = self.debug)
 
             # Dup fds for child
             def _dup2(a, b):
