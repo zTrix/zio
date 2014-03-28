@@ -59,8 +59,7 @@ def NONE(s): return ''
 
 class zio(object):
 
-    # TODO: logfile support ?
-    def __init__(self, target, stdin = PIPE, stdout = TTY, print_read = RAW, print_write = RAW, timeout = 8, cwd = None, env = None, sighup = signal.SIG_IGN, write_delay = 0.05, ignorecase = False):
+    def __init__(self, target, stdin = PIPE, stdout = TTY, print_read = RAW, print_write = RAW, timeout = 8, cwd = None, env = None, sighup = signal.SIG_IGN, write_delay = 0.05, stdin_tty_raw = True, ignorecase = False, debug = None):
         """
         zio is an easy-to-use io library for pwning development, supporting an unified interface for local process pwning and remote tcp socket io
 
@@ -77,6 +76,8 @@ class zio(object):
 
         if not target:
             raise Exception('cmdline or socket not provided for zio, try zio("ls -l")')
+
+        self.debug = debug
 
         self.target = target
         self.print_read = print_read
@@ -232,8 +233,11 @@ class zio(object):
                 # there is no way to eliminate controlling characters in tcattr
                 # so we have to set raw mode here now
                 self._wfd_init_mode = tty.tcgetattr(self.wfd)[:]
-                self.ttyraw(self.wfd)
-                self._wfd_raw_mode = tty.tcgetattr(self.wfd)[:]
+                if stdin_tty_raw:
+                    self.ttyraw(self.wfd)
+                    self._wfd_raw_mode = tty.tcgetattr(self.wfd)[:]
+                else:
+                    self._wfd_raw_mode = self._wfd_init_mode[:]
 
             os.close(stdin_slave_fd)
             self.rfd = stdout_master_fd
@@ -580,14 +584,24 @@ class zio(object):
         # if input_filter is not none, we should let user do some line editing
         if not input_filter and os.isatty(pty.STDIN_FILENO):
             mode = tty.tcgetattr(pty.STDIN_FILENO)  # mode will be restored after interact
-            tty.setraw(pty.STDIN_FILENO)        # set to raw mode to pass all input thru, supporting apps as vim
-        # here, enable cooked mode for process stdin
-        # but we should only enable for those who need cooked mode, not stuff like vim
-        # we just do a simple detection here
+            self.ttyraw(pty.STDIN_FILENO)        # set to raw mode to pass all input thru, supporting apps as vim
         if os.isatty(self.wfd):
+            # here, enable cooked mode for process stdin
+            # but we should only enable for those who need cooked mode, not stuff like vim
+            # we just do a simple detection here
             wfd_mode = tty.tcgetattr(self.wfd)
+            if self.debug:
+                log('wfd now mode = ' + repr(wfd_mode), f = self.debug)
+                log('wfd raw mode = ' + repr(self._wfd_raw_mode), f = self.debug)
+                log('wfd ini mode = ' + repr(self._wfd_init_mode), f = self.debug)
             if wfd_mode == self._wfd_raw_mode:     # if untouched by forked child
                 tty.tcsetattr(self.wfd, tty.TCSAFLUSH, self._wfd_init_mode)
+                if self.debug:
+                    log('change wfd back to init mode', f = self.debug)
+            # but wait, things here are far more complex than that
+            # most applications set mode not by setting it to some value, but by flipping some bits in the flags
+            # so, if we set wfd raw mode at the beginning, we are unable to set the correct mode here
+            # to solve this situation, set stdin_tty_raw = False, but note that you will need to manually escape control characters by prefixing Ctrl-V
 
         try:
             rfdlist = [self.rfd, pty.STDIN_FILENO]
@@ -601,6 +615,8 @@ class zio(object):
                     r, w, e = self.__select(rfdlist, [], [])
                 except KeyboardInterrupt:
                     break
+                if self.debug:
+                    log('r  = ' + repr(r), f = self.debug)
                 if self.wfd in r:          # handle tty echo back first if wfd is a tty
                     try:
                         data = None
@@ -634,6 +650,9 @@ class zio(object):
                         # the subprocess may have closed before we get to reading it
                         if e.errno != errno.EIO:
                             raise
+                    if self.debug:
+                        wfd_mode = tty.tcgetattr(self.wfd)
+                        log('stdin wfd mode = ' + repr(wfd_mode), f = self.debug)
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
                     if data:
                         if input_filter: data = input_filter(data)
@@ -1483,7 +1502,7 @@ examples:
 def cmdline():
     import getopt
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'hi:o:t:r:w:d:a:b:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'ahead=', 'before='])
+        opts, args = getopt.getopt(sys.argv[1:], 'hi:o:t:r:w:d:a:b:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'ahead=', 'before=', 'debug='])
     except getopt.GetoptError, err:
         print str(err)
         usage()
@@ -1491,6 +1510,7 @@ def cmdline():
     
     kwargs = { 
         'stdin': 'tty',
+        'stdin_tty_raw': False,             # let's say few people use raw tty in the terminal by hand
     }
     decode = None
     ahead = None
@@ -1542,6 +1562,8 @@ def cmdline():
             ahead = a
         elif o in ('-b', '--before'):
             before = a
+        elif o in ('--debug',):
+            kwargs['debug'] = open(a, 'w')
 
     target = None
     if len(args) == 2:
