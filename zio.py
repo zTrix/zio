@@ -21,14 +21,14 @@ def stdout(s, color = None, on_color = None, attrs = None):
         sys.stdout.write(colored(s, color, on_color, attrs))
     sys.stdout.flush()
 
-def log(s, color = None, on_color = None, attrs = None, new_line = True):
+def log(s, color = None, on_color = None, attrs = None, new_line = True, f = sys.stderr):
     if not color:
-        print >> sys.stderr, str(s),
+        print >> f, str(s),
     else:
-        print >> sys.stderr, colored(str(s), color, on_color, attrs),
+        print >> f, colored(str(s), color, on_color, attrs),
     if new_line:
-        sys.stderr.write('\n')
-    sys.stderr.flush()
+        f.write('\n')
+    f.flush()
 
 def l16(i): return isinstance(i, (int, long)) and struct.pack('<H', i % (1<<16)) or struct.unpack('<H', i)[0]
 def b16(i): return isinstance(i, (int, long)) and struct.pack('>H', i % (1<<16)) or struct.unpack('>H', i)[0]
@@ -596,6 +596,7 @@ class zio(object):
                 rfdlist.append(self.wfd)
             while self.isalive():
                 if len(rfdlist) == 0: break
+                if self.rfd not in rfdlist: break
                 try:
                     r, w, e = self.__select(rfdlist, [], [])
                 except KeyboardInterrupt:
@@ -1428,6 +1429,18 @@ def usage():
     print """
 usage:
 
+    $ zio.py [options] cmdline | host port
+
+options:
+
+    -h, --help              help page, you are reading this now!
+    -i, --stdin             tty|pipe, specify tty or pipe stdin, default to tty
+    -o, --stdout            tty|pipe, specify tty or pipe stdout, default to tty
+    -t, --timeout           integer seconds, specify timeout
+    -a, --ahead             message to feed into stdin before interact
+
+examples:
+
     $ zio.py -h
         you are reading this help message
 
@@ -1436,8 +1449,6 @@ usage:
 
     $ zio.py [-t seconds] host port
         zio becomes a netcat
-
-examples:
 
     $ ./zio.py tty
     $ ./zio.py cat
@@ -1451,7 +1462,7 @@ examples:
 def cmdline():
     import getopt
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'hi:o:t:r:w:d:', ['help', 'stdin', 'stdout', 'timeout', 'read', 'write', 'decode'])
+        opts, args = getopt.getopt(sys.argv[1:], 'hi:o:t:r:w:d:a:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'ahead='])
     except getopt.GetoptError, err:
         print str(err)
         usage()
@@ -1461,6 +1472,7 @@ def cmdline():
         'stdin': 'tty'
     }
     decode = None
+    ahead = None
     for o, a in opts:
         if o in ('-h', '--help'):
             usage()
@@ -1504,6 +1516,8 @@ def cmdline():
                 decode = EVAL
             elif a.lower() == 'unhex':
                 decode = UNHEX
+        elif o in ('-a', '--ahead'):
+            ahead = a
 
     target = None
     if len(args) == 2:
@@ -1520,6 +1534,8 @@ def cmdline():
             target = args
 
     io = zio(target, **kwargs)
+    if ahead:
+        io.write(ahead)
     io.interact(input_filter = decode)
 
 if __name__ == '__main__':
