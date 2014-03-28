@@ -1165,7 +1165,7 @@ class zio(object):
         if extras:
             for e in extras:
                 hints.append(str(e))
-        gdb = colored('zio.py -b "For help" -a "`printf \'' + '\\r\\n'.join(hints) + '\\r\\n\'`" gdb', 'magenta') + '\nuse cmdline above to attach gdb then press enter to continue ... '
+        gdb = colored('zio.py -l 0.5 -b "For help" -a "`printf \'' + '\\r\\n'.join(hints) + '\\r\\n\'`" gdb', 'magenta') + '\nuse cmdline above to attach gdb then press enter to continue ... '
         raw_input(gdb)
 
     def _not_impl(self):
@@ -1474,8 +1474,12 @@ options:
     -i, --stdin             tty|pipe, specify tty or pipe stdin, default to tty
     -o, --stdout            tty|pipe, specify tty or pipe stdout, default to tty
     -t, --timeout           integer seconds, specify timeout
-    -b, --before            don't do anything before reading those input
+    -r, --read              how to print out content read from child process, may be RAW(True), NONE(False), REPR, HEX
+    -w, --write             how to print out content written to child process, may be RAW(True), NONE(False), REPR, HEX
     -a, --ahead             message to feed into stdin before interact
+    -b, --before            don't do anything before reading those input
+    -d, --decode            when in interact mode, this option can be used to specify decode function REPR/HEX to input raw hex bytes
+    -l, --delay             write delay, time to wait before write
 
 examples:
 
@@ -1500,7 +1504,7 @@ examples:
 def cmdline():
     import getopt
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'hi:o:t:r:w:d:a:b:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'ahead=', 'before=', 'debug='])
+        opts, args = getopt.getopt(sys.argv[1:], 'hi:o:t:r:w:d:a:b:l:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'ahead=', 'before=', 'debug=', 'delay='])
     except getopt.GetoptError, err:
         print str(err)
         usage()
@@ -1562,6 +1566,8 @@ def cmdline():
             before = a
         elif o in ('--debug',):
             kwargs['debug'] = open(a, 'w')
+        elif o in ('-l', '--delay'):
+            kwargs['write_delay'] = float(a)
 
     target = None
     if len(args) == 2:
