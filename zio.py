@@ -1131,6 +1131,26 @@ class zio(object):
         raise TIMEOUT('Timeout exceeded. size to read: %d' % size)
         # raise Exception('Reached an unexpected state, timeout = %d' % (timeout))
 
+    def gdb_hint(self, breakpoints = None, relative = None, extras = None):
+        if self.mode() == SOCKET:
+            return
+        assert self.pid > 0
+        hints = ['attach %d' % self.pid]
+        base = 0
+        if relative:
+            vmmap = open('/proc/%d/maps' % self.pid).read()
+            for line in vmmap.splitlines():
+                if line.lower().find(relative.lower()) > -1:
+                    base = int(line.split('-')[0], 16)
+                    break
+        for b in breakpoints:
+            hints.append('b *' + hex(base + b))
+        if extras:
+            for e in extras:
+                hints.append(str(e))
+        gdb = colored('zio.py -b "For help" -a "`printf \'' + '\\r\\n'.join(hints) + '\\r\\n\'`" gdb', 'magenta') + '\nuse cmdline above to attach gdb then press enter to continue ... '
+        raw_input(gdb)
+
     def _not_impl(self):
         raise NotImplementedError("Not Implemented")
 
@@ -1437,6 +1457,7 @@ options:
     -i, --stdin             tty|pipe, specify tty or pipe stdin, default to tty
     -o, --stdout            tty|pipe, specify tty or pipe stdout, default to tty
     -t, --timeout           integer seconds, specify timeout
+    -b, --before            don't do anything before reading those input
     -a, --ahead             message to feed into stdin before interact
 
 examples:
@@ -1462,17 +1483,18 @@ examples:
 def cmdline():
     import getopt
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'hi:o:t:r:w:d:a:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'ahead='])
+        opts, args = getopt.getopt(sys.argv[1:], 'hi:o:t:r:w:d:a:b:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'ahead=', 'before='])
     except getopt.GetoptError, err:
         print str(err)
         usage()
         sys.exit(10)
     
     kwargs = { 
-        'stdin': 'tty'
+        'stdin': 'tty',
     }
     decode = None
     ahead = None
+    before = None
     for o, a in opts:
         if o in ('-h', '--help'):
             usage()
@@ -1518,6 +1540,8 @@ def cmdline():
                 decode = UNHEX
         elif o in ('-a', '--ahead'):
             ahead = a
+        elif o in ('-b', '--before'):
+            before = a
 
     target = None
     if len(args) == 2:
@@ -1534,6 +1558,8 @@ def cmdline():
             target = args
 
     io = zio(target, **kwargs)
+    if before:
+        io.read_until(before)
     if ahead:
         io.write(ahead)
     io.interact(input_filter = decode)

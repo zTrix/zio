@@ -59,9 +59,5 @@ Just don't read '\n' or '\r', use `readline()` instead
    - http://marcocorvi.altervista.org/games/lkpe/tty/tty.htm
    - http://www.linusakesson.net/programming/tty/
 
-## TODO
-
- - add attach_gdb function
-
 
 [zio]:https://github.com/zTrix/zio
