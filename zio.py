@@ -637,7 +637,8 @@ class zio(object):
                             raise
                     if data:
                         if output_filter: data = output_filter(data)
-                        stdout(self.print_read(data))
+                        # now we are in interact mode, so users want to see things in real, don't wrap things with print_read here
+                        stdout(data)
                     else:
                         rfdlist.remove(self.rfd)
                 if pty.STDIN_FILENO in r:
@@ -658,8 +659,8 @@ class zio(object):
                         if i != -1: data = data[:i]
                         if not os.isatty(self.wfd):     # we must do the translation when tty does not help
                             data = data.replace('\r', '\n')
-                            # also echo back by ourselves
-                            stdout(self.print_write(data))
+                            # also echo back by ourselves, now we are echoing things we input by hand, so there is no need to wrap with print_write
+                            stdout(data)
                         while data != b'' and self.isalive():
                             n = self._write(data)
                             data = data[n:]
@@ -681,7 +682,7 @@ class zio(object):
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
                     if data:
                         if output_filter: data = output_filter(data)
-                        stdout(self.print_read(data))
+                        stdout(data)
                     else:
                         break
                 else:
