@@ -22,7 +22,7 @@ io.interact()
 
 ## License
 
-[zio] use [SATA License](../blob/master/LICENSE.txt) (Star And Thank Author License), so you have to star this project before using. Read the [license](../blob/master/LICENSE.txt) carefully.
+[zio] use [SATA License](LICENSE.txt) (Star And Thank Author License), so you have to star this project before using. Read the [license](LICENSE.txt) carefully.
 
 ## Dependency
 
