@@ -16,7 +16,7 @@
 # The above copyright notice and this permission notice shall be included in
 # all copies or substantial portions of the Software. 
 # 
-# And wait, the most important, you shall star the github project(s) in project url 
+# And wait, the most important, you shall star/+1/like the project(s) in project url 
 # section above first, and then thank the author(s) in Copyright section. 
 # 
 # Here are some suggested ways:
@@ -24,9 +24,11 @@
 #  - Email the authors a thank-you letter, and make friends with him/her/them.
 #  - Report bugs or issues.
 #  - Tell friends what a wonderful project this is.
+#  - And, sure, you can just express thanks in your mind without telling the world.
 # 
-# Contributors of this project by forking have the option to add his/her name and forked project url
-# at corresponding section, but shall not delete or modify names/urls before him/her.
+# Contributors of this project by forking have the option to add his/her name and 
+# forked project url at copyright and project url sections, but shall not delete 
+# or modify anything else in these two sections.
 # 
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -596,6 +598,9 @@ class zio(object):
                         if data:
                             if output_filter: data = output_filter(data)
                             stdout(data)
+                        else:       # EOF
+                            self.flag_eof = True
+                            break
                     except EOF:
                         self.flag_eof = True
                         break
@@ -684,6 +689,7 @@ class zio(object):
                         stdout(data)
                     else:
                         rfdlist.remove(self.rfd)
+                        self.flag_eof = True
                 if pty.STDIN_FILENO in r:
                     try:
                         data = None
@@ -713,7 +719,7 @@ class zio(object):
                     else:
                         self.end(force_close = True)
                         rfdlist.remove(pty.STDIN_FILENO)
-            while True:
+            while self.isalive():
                 r, w, e = self.__select([self.rfd], [], [], timeout = self.close_delay)
                 if self.rfd in r:
                     try:
@@ -727,6 +733,7 @@ class zio(object):
                         if output_filter: data = output_filter(data)
                         stdout(data)
                     else:
+                        self.flag_eof = True
                         break
                 else:
                     break
