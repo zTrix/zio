@@ -1,4 +1,44 @@
 #!/usr/bin/env python2
+#===============================================================================
+# The Star And Thank Author License (SATA)
+# 
+# Copyright (c) 2014 zTrix(i@ztrix.me)
+# 
+# Project Url: https://github.com/zTrix/zio
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software. 
+# 
+# And wait, the most important, you shall star the github project(s) in project url 
+# section above first, and then thank the author(s) in Copyright section. 
+# 
+# Here are some suggested ways:
+# 
+#  - Email the authors a thank-you letter, and make friends with him/her/them.
+#  - Report bugs or issues.
+#  - Tell friends what a wonderful project this is.
+# 
+# Contributors of this project by forking have the option to add his/her name and forked project url
+# at corresponding section, but shall not delete or modify names/urls before him/her.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+#===============================================================================
+
+__version__ = "1.0.0"
+__project__ = "https://github.com/zTrix/zio"
 
 import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc, platform
 try:
@@ -11,6 +51,9 @@ try:
 except:
     def colored(text, color=None, on_color=None, attrs=None):
         return text
+
+if "windows" in platform.system().lower():
+    raise ImportError("zio %s is currently only supported on linux and osx." % __version__)
 
 __ALL__ = ['stdout', 'log', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'HEX', 'EVAL', 'UNHEX', 'RAW', 'NONE', 'COLORED', 'PIPE', 'TTY']
 

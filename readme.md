@@ -20,6 +20,17 @@ io.write(your_awesome_ropchain_or_shellcode)
 io.interact()
 ```
 
+## License
+
+[zio] use [SATA License](../blob/master/LICENSE.txt) (Star And Thank Author License), so you have to star this project before using. Read the [license](../blob/master/LICENSE.txt) carefully.
+
+## Dependency
+
+ - Linux or OSX
+ - Python 2.6, 2.7
+ - termcolor (optional, for color support)
+    - $ pip install termcolor
+
 ## Examples
  
 ```python
