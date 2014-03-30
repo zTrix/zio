@@ -158,8 +158,12 @@ class zio(object):
         self.buffer = str()
 
         if self.mode() == SOCKET:
-            self.sock = socket.create_connection(self.target, self.timeout)
-            self.name = '<socket ' + self.target[0] + ':' + str(self.target[1]) + '>'
+            if isinstance(self.target, socket.socket):
+                self.sock = self.target
+                self.name = repr(self.target)
+            else:
+                self.sock = socket.create_connection(self.target, self.timeout)
+                self.name = '<socket ' + self.target[0] + ':' + str(self.target[1]) + '>'
             self.rfd = self.wfd = self.sock.fileno()
             self.closed = False
             return
@@ -772,7 +776,7 @@ class zio(object):
         
         if not hasattr(self, '_io_mode'):
             
-            if hostport_tuple(self.target):
+            if hostport_tuple(self.target) or isinstance(self.target, socket.socket):
                 self._io_mode = SOCKET
             else:
                 # TODO: add more check condition
