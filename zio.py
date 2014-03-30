@@ -584,7 +584,7 @@ class zio(object):
                     'job control with our child pid?')
         return False
 
-    def interact(self, escape_character=chr(29), input_filter = None, output_filter = None):
+    def interact(self, escape_character=chr(29), input_filter = None, output_filter = None, raw_rw = True):
         """
         when stdin is passed using os.pipe, backspace key will not work as expected, 
         if wfd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so you should choose the right input when using zio
@@ -601,7 +601,7 @@ class zio(object):
                         data = self._read(1024)
                         if data:
                             if output_filter: data = output_filter(data)
-                            stdout(data)
+                            stdout(raw_rw and data or self.print_read(data))
                         else:       # EOF
                             self.flag_eof = True
                             break
@@ -676,8 +676,8 @@ class zio(object):
                             raise
                     if data:
                         if output_filter: data = output_filter(data)
-                        # already translated by tty, so don't wrap print_write anymore
-                        stdout(data)
+                        # already translated by tty, so don't wrap print_write anymore by default, unless raw_rw set to False
+                        stdout(raw_rw and data or self.print_write(data))
                     else:
                         rfdlist.remove(self.wfd)
                 if self.rfd in r:
@@ -689,8 +689,8 @@ class zio(object):
                             raise
                     if data:
                         if output_filter: data = output_filter(data)
-                        # now we are in interact mode, so users want to see things in real, don't wrap things with print_read here
-                        stdout(data)
+                        # now we are in interact mode, so users want to see things in real, don't wrap things with print_read here by default, unless raw_rw set to False
+                        stdout(raw_rw and data or self.print_read(data))
                     else:
                         rfdlist.remove(self.rfd)
                         self.flag_eof = True
@@ -712,8 +712,8 @@ class zio(object):
                         if i != -1: data = data[:i]
                         if not os.isatty(self.wfd):     # we must do the translation when tty does not help
                             data = data.replace('\r', '\n')
-                            # also echo back by ourselves, now we are echoing things we input by hand, so there is no need to wrap with print_write
-                            stdout(data)
+                            # also echo back by ourselves, now we are echoing things we input by hand, so there is no need to wrap with print_write by default, unless raw_rw set to False
+                            stdout(raw_rw and data or self.print_write(data))
                         while data != b'' and self.isalive():
                             n = self._write(data)
                             data = data[n:]
@@ -735,7 +735,7 @@ class zio(object):
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
                     if data:
                         if output_filter: data = output_filter(data)
-                        stdout(data)
+                        stdout(raw_rw and data or self.print_read(data))
                     else:
                         self.flag_eof = True
                         break
@@ -1643,7 +1643,7 @@ def cmdline():
         io.read_until(before)
     if ahead:
         io.write(ahead)
-    io.interact(input_filter = decode)
+    io.interact(input_filter = decode, raw_rw = False)
 
 if __name__ == '__main__':
 
