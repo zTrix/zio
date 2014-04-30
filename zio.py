@@ -894,15 +894,15 @@ class zio(object):
         self.wfd = -1
         self.closed = True
 
-    def read(self, size = None):
+    def read(self, size = None, timeout = -1):
         if size == 0:
             return str()
         elif size < 0 or size is None:
-            self.read_loop(searcher_re(self.compile_pattern_list(EOF)))
+            self.read_loop(searcher_re(self.compile_pattern_list(EOF)), timeout = timeout)
             return self.before
         
         cre = re.compile('.{%d}' % size, re.DOTALL)
-        index = self.read_loop(searcher_re(self.compile_pattern_list([cre, EOF])))
+        index = self.read_loop(searcher_re(self.compile_pattern_list([cre, EOF])), timeout = timeout)
         if index == 0:
             assert self.before == ''
             return self.after
@@ -914,13 +914,10 @@ class zio(object):
     def readline(self, size = -1):
         if size == 0:
             return str()
-        if self.mode() == PROCESS:
-            lineseps = [b'\r\n', EOF]
-        else:
-            lineseps = [b'\r\n', b'\n', EOF]
+        lineseps = [b'\r\n', b'\n', EOF]
         index = self.read_loop(searcher_re(self.compile_pattern_list(lineseps)))
-        if index == 0:
-            return self.before + b'\n'
+        if index < 2:
+            return self.before + lineseps[index]
         else:
             return self.before
 
@@ -955,8 +952,16 @@ class zio(object):
         matched = self.read_loop(searcher_string(pattern_list), timeout, searchwindowsize)
         ret = self.before 
         if isinstance(self.after, basestring):
-            ret += self.after
+            ret += self.after       # after is the matched string, before is the string before this match
         return ret          # be compatible with telnetlib.read_until
+
+    def read_until_re(self, pattern, timeout = -1, searchwindowsize = None):
+        compiled_pattern_list = self.compile_pattern_list(pattern)
+        matched = self.read_loop(searcher_re(compiled_pattern_list), timeout, searchwindowsize)
+        ret = self.before
+        if isinstance(self.after, basestring):
+            ret += self.after
+        return ret
 
     def read_loop(self, searcher, timeout=-1, searchwindowsize = None):
 
@@ -983,7 +988,7 @@ class zio(object):
                     self.buffer = incoming[searcher.end:]
                     self.before = incoming[: searcher.start]
                     self.after = incoming[searcher.start: searcher.end]
-                    self.match = searcher.match
+                    self.match = searcher.match     # should be equal to self.after now if not (EOF or TIMEOUT)
                     self.match_index = index
                     return self.match_index
                 # No match at this point
