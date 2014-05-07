@@ -1220,8 +1220,9 @@ class zio(object):
                 if line.lower().find(relative.lower()) > -1:
                     base = int(line.split('-')[0], 16)
                     break
-        for b in breakpoints:
-            hints.append('b *' + hex(base + b))
+        if breakpoints:
+            for b in breakpoints:
+                hints.append('b *' + hex(base + b))
         if extras:
             for e in extras:
                 hints.append(str(e))
