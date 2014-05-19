@@ -57,7 +57,7 @@ except:
 if "windows" in platform.system().lower():
     raise ImportError("zio %s is currently only supported on linux and osx." % __version__)
 
-__ALL__ = ['stdout', 'log', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'HEX', 'EVAL', 'UNHEX', 'RAW', 'NONE', 'COLORED', 'PIPE', 'TTY']
+__ALL__ = ['stdout', 'log', 'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'HEX', 'EVAL', 'UNHEX', 'RAW', 'NONE', 'COLORED', 'PIPE', 'TTY']
 
 def stdout(s, color = None, on_color = None, attrs = None):
     if not color:
@@ -75,6 +75,8 @@ def log(s, color = None, on_color = None, attrs = None, new_line = True, f = sys
         f.write('\n')
     f.flush()
 
+def l8 (i): return isinstance(i, (int, long)) and struct.pack('<B', i % (1<< 8)) or struct.unpack('<B', i)[0]
+def b8 (i): return isinstance(i, (int, long)) and struct.pack('>B', i % (1<< 8)) or struct.unpack('>B', i)[0]
 def l16(i): return isinstance(i, (int, long)) and struct.pack('<H', i % (1<<16)) or struct.unpack('<H', i)[0]
 def b16(i): return isinstance(i, (int, long)) and struct.pack('>H', i % (1<<16)) or struct.unpack('>H', i)[0]
 def l32(i): return isinstance(i, (int, long)) and struct.pack('<I', i % (1<<32)) or struct.unpack('<I', i)[0]
