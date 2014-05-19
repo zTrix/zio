@@ -72,14 +72,46 @@ def log(s, color = None, on_color = None, attrs = None, new_line = True, f = sys
         f.write('\n')
     f.flush()
 
-def l8 (i): return isinstance(i, (int, long)) and struct.pack('<B', i % (1<< 8)) or struct.unpack('<B', i)[0]
-def b8 (i): return isinstance(i, (int, long)) and struct.pack('>B', i % (1<< 8)) or struct.unpack('>B', i)[0]
-def l16(i): return isinstance(i, (int, long)) and struct.pack('<H', i % (1<<16)) or struct.unpack('<H', i)[0]
-def b16(i): return isinstance(i, (int, long)) and struct.pack('>H', i % (1<<16)) or struct.unpack('>H', i)[0]
-def l32(i): return isinstance(i, (int, long)) and struct.pack('<I', i % (1<<32)) or struct.unpack('<I', i)[0]
-def b32(i): return isinstance(i, (int, long)) and struct.pack('>I', i % (1<<32)) or struct.unpack('>I', i)[0]
-def l64(i): return isinstance(i, (int, long)) and struct.pack('<Q', i % (1<<64)) or struct.unpack('<Q', i)[0]
-def b64(i): return isinstance(i, (int, long)) and struct.pack('>Q', i % (1<<64)) or struct.unpack('>Q', i)[0]
+def _lb_wrapper(func):
+    endian = func.func_name[0] == 'l' and '<' or '>'
+    bits = int(func.func_name[1:])
+    pfs = {8: 'B', 16: 'H', 32: 'I', 64: 'Q'}
+    def wrapper(*args):
+        ret = []
+        join = False
+        for i in args:
+            if isinstance(i, (int, long)):
+                join = True
+                v = struct.pack(endian + pfs[bits], i % (1 << bits))
+                ret.append(v)
+            else:
+                v = struct.unpack(endian + pfs[bits] * (len(i) * 8/bits), i)
+                ret += v
+        if join:
+            return ''.join(ret)
+        elif len(ret) == 1:
+            return ret[0]
+        else:
+            return ret
+    wrapper.func_name = func.func_name
+    return wrapper
+
+@_lb_wrapper
+def l8 (*args): pass
+@_lb_wrapper
+def b8 (*args): pass
+@_lb_wrapper
+def l16(*args): pass
+@_lb_wrapper
+def b16(*args): pass
+@_lb_wrapper
+def l32(*args): pass
+@_lb_wrapper
+def b32(*args): pass
+@_lb_wrapper
+def l64(*args): pass
+@_lb_wrapper
+def b64(*args): pass
 
 class EOF(Exception):
     """Raised when EOF is read from child or socket.
@@ -1597,10 +1629,10 @@ examples:
     $ ./zio.py -i pipe ssh root@127.1   # you must be crazy to do this!
 """
 
-def cmdline():
+def cmdline(argv):
     import getopt
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'hi:o:t:r:w:d:a:b:l:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'ahead=', 'before=', 'debug=', 'delay='])
+        opts, args = getopt.getopt(argv, 'hi:o:t:r:w:d:a:b:l:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'ahead=', 'before=', 'debug=', 'delay='])
     except getopt.GetoptError, err:
         print str(err)
         usage()
@@ -1694,6 +1726,6 @@ if __name__ == '__main__':
         usage()
         sys.exit(0)
 
-    cmdline()
+    cmdline(sys.argv[1:])
 
 # vi:set et ts=4 sw=4 ft=python :
