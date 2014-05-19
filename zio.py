@@ -912,9 +912,36 @@ class zio(object):
             return self.after
         return self.before
 
-    def read_until_timeout(self, timeout):
-        self.read_loop(searcher_re(self.compile_pattern_list(TIMEOUT)), timeout = timeout)
-        return self.before
+    def read_until_timeout(self, timeout = 0.05):
+        try:
+            incoming = self.buffer
+            while True:
+                c = self.read_nonblocking(2048, timeout)
+                incoming = incoming + c
+                if self.mode() == PROCESS: time.sleep(0.0001)
+        except EOF:
+            err = sys.exc_info()[1]
+            self.buffer = str()
+            self.before = str()
+            self.after = EOF
+            self.match = incoming
+            self.match_index = None
+            raise EOF(str(err) + '\n' + str(self))
+        except TIMEOUT:
+            self.buffer = str()
+            self.before = str()
+            self.after = TIMEOUT
+            self.match = incoming
+            self.match_index = None
+            return incoming
+        except:
+            self.before = str()
+            self.after = None
+            self.match = incoming
+            self.match_index = None
+            raise
+
+    read_eager = read_until_timeout
 
     def readable(self):
         return self.__select([self.rfd], [], [], 0) == ([self.rfd], [], [])
