@@ -39,7 +39,7 @@
 # THE SOFTWARE.
 #===============================================================================
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __project__ = "https://github.com/zTrix/zio"
 
 import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc, platform
@@ -54,10 +54,7 @@ except:
     def colored(text, color=None, on_color=None, attrs=None):
         return text
 
-if "windows" in platform.system().lower():
-    raise ImportError("zio %s is currently only supported on linux and osx." % __version__)
-
-__ALL__ = ['stdout', 'log', 'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'HEX', 'EVAL', 'UNHEX', 'RAW', 'NONE', 'COLORED', 'PIPE', 'TTY']
+__ALL__ = ['stdout', 'log', 'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'EVAL', 'HEX', 'UNHEX', 'BIN', 'UNBIN', 'RAW', 'NONE', 'COLORED', 'PIPE', 'TTY']
 
 def stdout(s, color = None, on_color = None, attrs = None):
     if not color:
@@ -100,7 +97,9 @@ def COLORED(f, color = 'cyan', on_color = None, attrs = None): return lambda s :
 def REPR(s): return repr(str(s)) + '\r\n'
 def EVAL(s): return eval(s)     # don't pwn yourself!!!
 def HEX(s): return str(s).encode('hex') + '\r\n'
-def UNHEX(s): return s.strip().decode('hex')
+def UNHEX(s): s=str(s).strip(); return (len(s) % 2 and '0'+s or s).decode('hex') # hex-strings with odd length are now acceptable
+def BIN(s): return ''.join([format(ord(x),'08b') for x in str(s)]) + '\r\n'
+def UNBIN(s): s=str(s).strip(); return ''.join([chr(int(s[x:x+8],2)) for x in xrange(0,len(s),8)])
 def RAW(s): return str(s)
 def NONE(s): return ''
 
@@ -169,6 +168,9 @@ class zio(object):
             self.rfd = self.wfd = self.sock.fileno()
             self.closed = False
             return
+
+        if "windows" in platform.system().lower():
+            raise Exception("zio (version %s) process mode is currently only supported on linux and osx." % __version__)
 
         # spawn process below
         self.pid = None
@@ -908,6 +910,10 @@ class zio(object):
         if index == 0:
             assert self.before == ''
             return self.after
+        return self.before
+
+    def read_until_timeout(self, timeout):
+        self.read_loop(searcher_re(self.compile_pattern_list(TIMEOUT)), timeout = timeout)
         return self.before
 
     def readable(self):
