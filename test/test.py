@@ -9,6 +9,7 @@ class Test(unittest.TestCase):
         pass
 
     def exec_script(self, script, **kwargs):
+        from zio import which
         py = which('python2') or which('python')
         self.assertNotEqual(py, None)
         return self.cmdline(' '.join([py, '-u', os.path.join(os.path.dirname(sys.argv[0]), script)]), **kwargs)
