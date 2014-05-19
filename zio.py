@@ -57,7 +57,7 @@ except:
 if "windows" in platform.system().lower():
     raise ImportError("zio %s is currently only supported on linux and osx." % __version__)
 
-__ALL__ = ['stdout', 'log', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'HEX', 'EVAL', 'UNHEX', 'RAW', 'NONE', 'COLORED', 'PIPE', 'TTY']
+__ALL__ = ['stdout', 'log', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'HEX', 'BIN', 'UNBIN', 'NUMERIFY', 'UNNUMERIFY', 'EVAL', 'UNHEX', 'RAW', 'NONE', 'COLORED', 'LJUSTMUL', 'RJUSTMUL', 'PIPE', 'TTY']
 
 def stdout(s, color = None, on_color = None, attrs = None):
     if not color:
@@ -94,11 +94,19 @@ PROCESS = 'process'
 PIPE = 'PIPE'
 TTY = 'tty'
 
+# Some gadgets
+def LJUSTMUL(s, width, fillchar=' '): s=str(s); assert len(fillchar)==1; return (len(s)%width==0 and s) or s.ljust(len(s)+width-len(s)%width, fillchar)
+def RJUSTMUL(s, width, fillchar=' '): s=str(s); assert len(fillchar)==1; return (len(s)%width==0 and s) or s.rjust(len(s)+width-len(s)%width, fillchar)
+
 def COLORED(f, color = 'cyan', on_color = None, attrs = None): return lambda s : colored(f(s), color, on_color, attrs)
 def REPR(s): return repr(str(s)) + '\r\n'
 def EVAL(s): return eval(s)     # don't pwn yourself!!!
 def HEX(s): return str(s).encode('hex') + '\r\n'
-def UNHEX(s): return s.strip().decode('hex')
+def UNHEX(s): return RJUSTMUL(s.strip(),2,'0').decode('hex') # hex-strings with odd length are now acceptable
+def BIN(s): return ''.join([bin(ord(x))[2:].rjust(8,'0') for x in str(s)]) + '\r\n'
+def UNBIN(s): s=str(s).strip(); return ''.join([chr(int(s[x:x+8],2)) for x in range(0,len(s),8)])
+def NUMERIFY(s): return int(str(s).encode('hex'),16)
+def UNNUMERIFY(i): return isinstance(i,(int, long)) and RJUSTMUL(hex(i)[2:].rstrip('L'),2,'0').decode('hex')
 def RAW(s): return str(s)
 def NONE(s): return ''
 
