@@ -127,7 +127,39 @@ TTY = 'tty'
 
 def COLORED(f, color = 'cyan', on_color = None, attrs = None): return lambda s : colored(f(s), color, on_color, attrs)
 def REPR(s): return repr(str(s)) + '\r\n'
-def EVAL(s): return eval(s)     # don't pwn yourself!!!
+def EVAL(s):    # now you are not worried about pwning yourself
+    st = 0      # 0 for normal, 1 for escape, 2 for \xXX
+    ret = []
+    i = 0
+    while i < len(s):
+        if st == 0:
+            if s[i] == '\\':
+                st = 1
+            else:
+                ret.append(s[i])
+        elif st == 1:
+            if s[i] in ('"', "'", "\\", "t", "n", "r"):
+                if s[i] == 't':
+                    ret.append('\t')
+                elif s[i] == 'n':
+                    ret.append('\n')
+                elif s[i] == 'r':
+                    ret.append('\r')
+                else:
+                    ret.append(s[i])
+                st = 0
+            elif s[i] == 'x':
+                st = 2
+            else:
+                raise Exception('invalid repr of str %s' % s)
+        else:
+            num = int(s[i:i+2], 16)
+            assert 0 <= num < 256
+            ret.append(chr(num))
+            st = 0
+            i += 1
+        i += 1
+    return ''.join(ret)
 def HEX(s): return str(s).encode('hex') + '\r\n'
 def UNHEX(s): s=str(s).strip(); return (len(s) % 2 and '0'+s or s).decode('hex') # hex-strings with odd length are now acceptable
 def BIN(s): return ''.join([format(ord(x),'08b') for x in str(s)]) + '\r\n'
@@ -144,6 +176,7 @@ class zio(object):
         example:
 
         io = zio(('localhost', 80))
+        io = zio(socket.create_connection(('127.0.0.1', 80)))
         io = zio('ls -l')
         io = zio(['ls', '-l'])
 
