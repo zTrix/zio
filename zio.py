@@ -261,8 +261,9 @@ class zio(object):
         assert self.pid is None, 'pid must be None, to prevent double spawn'
         assert self.command is not None, 'The command to be spawn must not be None'
 
-        stdout_master_fd, stdout_slave_fd = stdout == PIPE and self.pipe_cloexec() or pty.openpty()
-        if stdout_master_fd < 0 or stdout_slave_fd < 0: raise Exception('Could not openpty for stdout/stderr')
+        if stdout == PIPE: stdout_slave_fd, stdout_master_fd = self.pipe_cloexec()
+        else: stdout_master_fd, stdout_slave_fd = pty.openpty()
+        if stdout_master_fd < 0 or stdout_slave_fd < 0: raise Exception('Could not create pipe or openpty for stdout/stderr')
 
         # use another pty for stdin because we don't want our input to be echoed back in stdout
         # set echo off does not help because in application like ssh, when you input the password
@@ -332,7 +333,7 @@ class zio(object):
 
             if self.cwd is not None:
                 os.chdir(self.cwd)
-
+            
             if self.env is None:
                 os.execv(self.command, self.args)
             else:
@@ -744,8 +745,7 @@ class zio(object):
                     r, w, e = self.__select(rfdlist, [], [])
                 except KeyboardInterrupt:
                     break
-                if self.debug:
-                    log('r  = ' + repr(r), f = self.debug)
+                if self.debug: log('r  = ' + repr(r), f = self.debug)
                 if self.wfd in r:          # handle tty echo back first if wfd is a tty
                     try:
                         data = None

@@ -122,6 +122,12 @@ class Test(unittest.TestCase):
         io = zio(' '.join([py, '-u', os.path.join(os.path.dirname(sys.argv[0]), 'myprintf.py'), "'\\r\\n" + repr(''.join(unprintable))[1:-1] + "\\n'"]), stdout = TTY_RAW, print_read = COLORED(REPR))
         rd = io.read()
         self.assertEqual(rd, "\r\n" + ''.join(unprintable) + "\n")
+
+    def test_pipe_out(self):
+        io = zio('uname', stdout = PIPE)
+        r = io.read()
+        io.close()
+        self.assertEqual(r.strip(), os.uname()[0])
         
     # ---- below are tests for both socket and process IO
     
