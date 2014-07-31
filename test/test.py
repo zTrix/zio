@@ -8,11 +8,11 @@ class Test(unittest.TestCase):
     def setUp(self):
         pass
 
-    def exec_script(self, script, **kwargs):
+    def exec_script(self, script, *args, **kwargs):
         from zio import which
         py = which('python2') or which('python')
         self.assertNotEqual(py, None)
-        return self.cmdline(' '.join([py, '-u', os.path.join(os.path.dirname(sys.argv[0]), script)]), **kwargs)
+        return self.cmdline(' '.join([py, '-u', os.path.join(os.path.dirname(sys.argv[0]), script)] + list(args)), **kwargs)
 
     def cmdline(self, cmd, **kwargs):
         print ''
@@ -97,6 +97,31 @@ class Test(unittest.TestCase):
                 except:
                     pass
             break
+
+    def test_tty_raw_out(self):
+        s = []
+        ans = []
+        for i in range(10):
+            r = random.randint(0,1)
+            s.append('%d%s' % (i, r and '\\r\\n' or '\\n'))
+            ans.append('%d%s' % (i, r and '\r\n' or '\n'))
+        ans = ''.join(ans)
+        cmd = "printf '" + ''.join(s) + "'"
+        io = zio(cmd, stdout = TTY_RAW)
+        rd = io.read()
+        io.close()
+        self.assertEqual(rd, ans)
+
+        unprintable = [chr(c) for c in range(256) if chr(c) not in string.printable]
+        for i in range(10):
+            random.shuffle(unprintable)
+
+        from zio import which
+        py = which('python2') or which('python')
+        self.assertNotEqual(py, None)
+        io = zio(' '.join([py, '-u', os.path.join(os.path.dirname(sys.argv[0]), 'myprintf.py'), "'\\r\\n" + repr(''.join(unprintable))[1:-1] + "\\n'"]), stdout = TTY_RAW, print_read = COLORED(REPR))
+        rd = io.read()
+        self.assertEqual(rd, "\r\n" + ''.join(unprintable) + "\n")
         
     # ---- below are tests for both socket and process IO
     

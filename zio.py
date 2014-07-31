@@ -54,7 +54,7 @@ except:
     def colored(text, color=None, on_color=None, attrs=None):
         return text
 
-__all__ = ['stdout', 'log', 'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'EVAL', 'HEX', 'UNHEX', 'BIN', 'UNBIN', 'RAW', 'NONE', 'COLORED', 'PIPE', 'TTY']
+__all__ = ['stdout', 'log', 'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'EVAL', 'HEX', 'UNHEX', 'BIN', 'UNBIN', 'RAW', 'NONE', 'COLORED', 'PIPE', 'TTY', 'TTY_RAW']
 
 def stdout(s, color = None, on_color = None, attrs = None):
     if not color:
@@ -120,10 +120,11 @@ class EOF(Exception):
 class TIMEOUT(Exception):
     """Raised when a read timeout exceeds the timeout. """
 
-SOCKET = 'socket'
-PROCESS = 'process'
-PIPE = 'PIPE'
-TTY = 'tty'
+SOCKET = 'socket'       # zio mode socket
+PROCESS = 'process'     # zio mode process
+PIPE = 'pipe'           # io mode (process io): send all characters untouched, but use PIPE, so libc cache may apply
+TTY = 'tty'             # io mode (process io): normal tty behavier, support Ctrl-C to terminate, and auto \r\n to display more readable lines for human
+TTY_RAW = 'ttyraw'      # io mode (process io): send all characters just untouched
 
 def COLORED(f, color = 'cyan', on_color = None, attrs = None): return lambda s : colored(f(s), color, on_color, attrs)
 def REPR(s): return repr(str(s)) + '\r\n'
@@ -169,7 +170,7 @@ def NONE(s): return ''
 
 class zio(object):
 
-    def __init__(self, target, stdin = PIPE, stdout = TTY, print_read = RAW, print_write = RAW, timeout = 8, cwd = None, env = None, sighup = signal.SIG_IGN, write_delay = 0.05, stdin_tty_raw = True, ignorecase = False, debug = None):
+    def __init__(self, target, stdin = PIPE, stdout = TTY_RAW, print_read = RAW, print_write = RAW, timeout = 8, cwd = None, env = None, sighup = signal.SIG_IGN, write_delay = 0.05, ignorecase = False, debug = None):
         """
         zio is an easy-to-use io library for pwning development, supporting an unified interface for local process pwning and remote tcp socket io
 
@@ -207,14 +208,14 @@ class zio(object):
 
         self.wfd = -1          # the fd to write to
         self.rfd = -1           # the fd to read from
-        
+
         self.write_delay = write_delay     # the delay before writing data, pexcept said Linux don't like this to be below 30ms
         self.close_delay = 0.1      # like pexcept, will used by close(), to give kernel time to update process status, time in seconds
         self.terminate_delay = 0.1  # like close_delay
         self.cwd = cwd
         self.env = env
         self.sighup = sighup
-     
+
         self.flag_eof = False
         self.closed = True
         self.exit_code = None
@@ -260,7 +261,7 @@ class zio(object):
         assert self.pid is None, 'pid must be None, to prevent double spawn'
         assert self.command is not None, 'The command to be spawn must not be None'
 
-        stdout_master_fd, stdout_slave_fd = stdout == TTY and pty.openpty() or self.pipe_cloexec()
+        stdout_master_fd, stdout_slave_fd = stdout == PIPE and self.pipe_cloexec() or pty.openpty()
         if stdout_master_fd < 0 or stdout_slave_fd < 0: raise Exception('Could not openpty for stdout/stderr')
 
         # use another pty for stdin because we don't want our input to be echoed back in stdout
@@ -268,7 +269,7 @@ class zio(object):
         # echo will be switched on again
         # and dont use os.pipe either, because many thing weired will happen, such as baskspace not working, ssh lftp command hang
 
-        stdin_master_fd, stdin_slave_fd = stdin == TTY and pty.openpty() or self.pipe_cloexec()
+        stdin_master_fd, stdin_slave_fd = stdin == PIPE and self.pipe_cloexec() or pty.openpty()
         if stdin_master_fd < 0 or stdin_slave_fd < 0: raise Exception('Could not openpty for stdin')
 
         gc_enabled = gc.isenabled()
@@ -286,7 +287,7 @@ class zio(object):
             raise Exception('failed to fork')
         elif self.pid == 0:     # Child
             os.close(stdout_master_fd)
-            
+
             if os.isatty(stdin_slave_fd):
                 self.__pty_make_controlling_tty(stdin_slave_fd)
                 # self.__pty_make_controlling_tty(stdout_slave_fd)
@@ -336,7 +337,7 @@ class zio(object):
                 os.execv(self.command, self.args)
             else:
                 os.execvpe(self.command, self.args, self.env)
-            
+
             # TODO: add subprocess errpipe to detect child error
             # child exit here, the same as subprocess module do
             os._exit(255)
@@ -344,19 +345,28 @@ class zio(object):
         else:
             # after fork, parent
             self.wfd = stdin_master_fd
+            self.rfd = stdout_master_fd
 
             if os.isatty(self.wfd):
                 # there is no way to eliminate controlling characters in tcattr
                 # so we have to set raw mode here now
                 self._wfd_init_mode = tty.tcgetattr(self.wfd)[:]
-                if stdin_tty_raw:
+                if stdin == TTY_RAW:
                     self.ttyraw(self.wfd)
                     self._wfd_raw_mode = tty.tcgetattr(self.wfd)[:]
                 else:
                     self._wfd_raw_mode = self._wfd_init_mode[:]
 
+            if os.isatty(self.rfd):
+                self._rfd_init_mode = tty.tcgetattr(self.rfd)[:]
+                if stdout == TTY_RAW:
+                    self.ttyraw(self.rfd, raw_in = False, raw_out = True)
+                    self._rfd_raw_mode = tty.tcgetattr(self.rfd)[:]
+                    if self.debug: log('stdout tty raw mode: %r' % self._rfd_raw_mode, f = self.debug)
+                else:
+                    self._rfd_raw_mode = self._rfd_init_mode[:]
+
             os.close(stdin_slave_fd)
-            self.rfd = stdout_master_fd
             os.close(stdout_slave_fd)
             if gc_enabled:
                 gc.enable()
@@ -475,8 +485,8 @@ class zio(object):
         return struct.unpack('HHHH', x)[0:2]
 
     def __str__(self):
-        ret = ['io-mode: %s' % self.mode(), 
-               'name: %s' % self.name, 
+        ret = ['io-mode: %s' % self.mode(),
+               'name: %s' % self.name,
                'timeout: %f' % self.timeout,
                'write-fd: %d' % (isinstance(self.wfd, (int, long)) and self.wfd or self.fileno()),
                'read-fd: %d' % (isinstance(self.rfd, (int, long)) and self.rfd or self.fileno()),
@@ -655,7 +665,7 @@ class zio(object):
 
     def interact(self, escape_character=chr(29), input_filter = None, output_filter = None, raw_rw = True):
         """
-        when stdin is passed using os.pipe, backspace key will not work as expected, 
+        when stdin is passed using os.pipe, backspace key will not work as expected,
         if wfd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so you should choose the right input when using zio
         """
         if self.mode() == SOCKET:
@@ -720,7 +730,7 @@ class zio(object):
             # but wait, things here are far more complex than that
             # most applications set mode not by setting it to some value, but by flipping some bits in the flags
             # so, if we set wfd raw mode at the beginning, we are unable to set the correct mode here
-            # to solve this situation, set stdin_tty_raw = False, but note that you will need to manually escape control characters by prefixing Ctrl-V
+            # to solve this situation, set stdin = TTY_RAW, but note that you will need to manually escape control characters by prefixing Ctrl-V
 
         try:
             rfdlist = [self.rfd, pty.STDIN_FILENO]
@@ -828,23 +838,26 @@ class zio(object):
 
         return os.isatty(self.rfd)
 
-    def ttyraw(self, fd, when = tty.TCSAFLUSH, echo = False):
+    def ttyraw(self, fd, when = tty.TCSAFLUSH, echo = False, raw_in = True, raw_out = False):
         mode = tty.tcgetattr(fd)[:]
-        mode[tty.IFLAG] = mode[tty.IFLAG] & ~(tty.BRKINT | tty.ICRNL | tty.INPCK | tty.ISTRIP | tty.IXON)
-        mode[tty.CFLAG] = mode[tty.CFLAG] & ~(tty.CSIZE | tty.PARENB)
-        mode[tty.CFLAG] = mode[tty.CFLAG] | tty.CS8
-        if echo:
-            mode[tty.LFLAG] = mode[tty.LFLAG] & ~(tty.ICANON | tty.IEXTEN | tty.ISIG)
-        else:
-            mode[tty.LFLAG] = mode[tty.LFLAG] & ~(tty.ECHO | tty.ICANON | tty.IEXTEN | tty.ISIG)
+        if raw_in:
+            mode[tty.IFLAG] = mode[tty.IFLAG] & ~(tty.BRKINT | tty.ICRNL | tty.INPCK | tty.ISTRIP | tty.IXON)
+            mode[tty.CFLAG] = mode[tty.CFLAG] & ~(tty.CSIZE | tty.PARENB)
+            mode[tty.CFLAG] = mode[tty.CFLAG] | tty.CS8
+            if echo:
+                mode[tty.LFLAG] = mode[tty.LFLAG] & ~(tty.ICANON | tty.IEXTEN | tty.ISIG)
+            else:
+                mode[tty.LFLAG] = mode[tty.LFLAG] & ~(tty.ECHO | tty.ICANON | tty.IEXTEN | tty.ISIG)
+        if raw_out:
+            mode[tty.OFLAG] = mode[tty.OFLAG] & ~(tty.OPOST)
         mode[tty.CC][tty.VMIN] = 1
         mode[tty.CC][tty.VTIME] = 0
         tty.tcsetattr(fd, when, mode)
 
     def mode(self):
-        
+
         if not hasattr(self, '_io_mode'):
-            
+
             if hostport_tuple(self.target) or isinstance(self.target, socket.socket):
                 self._io_mode = SOCKET
             else:
@@ -969,7 +982,7 @@ class zio(object):
         elif size < 0 or size is None:
             self.read_loop(searcher_re(self.compile_pattern_list(EOF)), timeout = timeout)
             return self.before
-        
+
         cre = re.compile('.{%d}' % size, re.DOTALL)
         index = self.read_loop(searcher_re(self.compile_pattern_list([cre, EOF])), timeout = timeout)
         if index == 0:
@@ -1050,7 +1063,7 @@ class zio(object):
             self._pattern_type_err(pattern_list)
         pattern_list = [prepare_pattern(p) for p in pattern_list]
         matched = self.read_loop(searcher_string(pattern_list), timeout, searchwindowsize)
-        ret = self.before 
+        ret = self.before
         if isinstance(self.after, basestring):
             ret += self.after       # after is the matched string, before is the string before this match
         return ret          # be compatible with telnetlib.read_until
@@ -1216,7 +1229,7 @@ class zio(object):
         '''This reads at most size characters from the child application. It
         includes a timeout. If the read does not complete within the timeout
         period then a TIMEOUT exception is raised. If the end of file is read
-        then an EOF exception will be raised. 
+        then an EOF exception will be raised.
 
         If timeout is None then the read may block indefinitely.
         If timeout is -1 then the self.timeout value is used. If timeout is 0
@@ -1620,7 +1633,7 @@ def hostport_tuple(target):
             return True
         except:
             return False
-    
+
     return type(target) == tuple and len(target) == 2 and isinstance(target[1], (int, long)) and target[1] >= 0 and target[1] < 65536 and _check_host(target[0])
 
 def usage():
@@ -1670,10 +1683,9 @@ def cmdline(argv):
         print str(err)
         usage()
         sys.exit(10)
-    
-    kwargs = { 
-        'stdin': 'tty',
-        'stdin_tty_raw': False,             # let's say few people use raw tty in the terminal by hand
+
+    kwargs = {
+        'stdin': TTY,                     # don't use tty_raw now let's say few people use raw tty in the terminal by hand
     }
     decode = None
     ahead = None
@@ -1685,11 +1697,15 @@ def cmdline(argv):
         elif o in ('-i', '--stdin'):
             if a.lower() == TTY.lower():
                 kwargs['stdin'] = TTY
+            elif a.lower() == TTY_RAW.lower():
+                kwargs['stdin'] = TTY_RAW
             else:
                 kwargs['stdin'] = PIPE
         elif o in ('-o', '--stdout'):
             if a.lower() == PIPE.lower():
                 kwargs['stdout'] = PIPE
+            elif a.lower() == TTY_RAW.lower():
+                kwargs['stdout'] = TTY_RAW
             else:
                 kwargs['stdout'] = TTY
         elif o in ('-t', '--timeout'):
