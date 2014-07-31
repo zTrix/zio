@@ -802,7 +802,7 @@ class zio(object):
                     else:
                         self.end(force_close = True)
                         rfdlist.remove(pty.STDIN_FILENO)
-            while self.isalive():
+            while True:     # read the final buffered output, note that the process probably is not alive, so use while True to read until end (fix pipe stdout interact mode bug)
                 r, w, e = self.__select([self.rfd], [], [], timeout = self.close_delay)
                 if self.rfd in r:
                     try:
