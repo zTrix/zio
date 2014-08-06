@@ -42,7 +42,7 @@
 __version__ = "1.0.1"
 __project__ = "https://github.com/zTrix/zio"
 
-import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc, platform
+import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc, platform, datetime
 try:
     from cStringIO import StringIO
 except ImportError:
@@ -63,11 +63,21 @@ def stdout(s, color = None, on_color = None, attrs = None):
         sys.stdout.write(colored(s, color, on_color, attrs))
     sys.stdout.flush()
 
-def log(s, color = None, on_color = None, attrs = None, new_line = True, f = sys.stderr):
+def log(s, color = None, on_color = None, attrs = None, new_line = True, timestamp = False, f = sys.stderr):
+    if timestamp is True:
+        now = datetime.datetime.now().strftime('[%Y-%m-%d_%H:%M:%S]')
+    elif timestamp is False:
+        now = None
+    elif timestamp:
+        now = timestamp
     if not color:
-        print >> f, str(s),
+        s = str(s)
     else:
-        print >> f, colored(str(s), color, on_color, attrs),
+        s = colored(str(s), color, on_color, attrs)
+    if now:
+        f.write(now)
+        f.write(' ')
+    f.write(s)
     if new_line:
         f.write('\n')
     f.flush()
