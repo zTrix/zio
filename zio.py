@@ -262,7 +262,7 @@ class zio(object):
 
         command_with_path = which(self.command)
         if command_with_path is None:
-            raise Exception('Command not found in path: %s' % self.command)
+            raise Exception('zio (process mode) Command not found in path: %s' % self.command)
 
         self.command = command_with_path
         self.args[0] = self.command
