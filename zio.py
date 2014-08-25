@@ -1338,12 +1338,16 @@ class zio(object):
 
     def gdb_hint(self, breakpoints = None, relative = None, extras = None):
         if self.mode() == SOCKET:
+            pid = pidof_socket(self.sock)
+        else:
+            pid = self.pid
+        if not pid:
+            raw_input(colored('[ WARN ] pid unavailable to attach gdb, please find out the pid by your own', 'yellow'))
             return
-        assert self.pid > 0
-        hints = ['attach %d' % self.pid]
+        hints = ['attach %d' % pid]
         base = 0
         if relative:
-            vmmap = open('/proc/%d/maps' % self.pid).read()
+            vmmap = open('/proc/%d/maps' % pid).read()
             for line in vmmap.splitlines():
                 if line.lower().find(relative.lower()) > -1:
                     base = int(line.split('-')[0], 16)
@@ -1640,6 +1644,41 @@ def split_command_line(command_line):       # this piece of code comes from pexc
     if arg != '':
         arg_list.append(arg)
     return arg_list
+
+def all_pids():
+    return [int(pid) for pid in os.listdir('/proc') if pid.isdigit()]
+
+def pidof_socket(prog):        # code borrowed from https://github.com/Gallopsled/pwntools to implement gdb attach of local socket
+    def toaddr((host, port)):
+        return '%08X:%04X' % (l32(socket.inet_aton(host)), port)
+    def getpid(loc, rem):
+        loc = toaddr(loc)
+        rem = toaddr(rem)
+        inode = 0
+        with open('/proc/net/tcp') as fd:
+            for line in fd:
+                line = line.split()
+                if line[1] == loc and line[2] == rem:
+                    inode = line[9]
+        if inode == 0:
+            return []
+        for pid in all_pids():
+            try:
+                for fd in os.listdir('/proc/%d/fd' % pid):
+                    fd = os.readlink('/proc/%d/fd/%s' % (pid, fd))
+                    m = re.match('socket:\[(\d+)\]', fd)
+                    if m:
+                        this_inode = m.group(1)
+                        if this_inode == inode:
+                            return pid
+            except:
+                pass
+    sock = prog.getsockname()
+    peer = prog.getpeername()
+    pids = [getpid(peer, sock), getpid(sock, peer)]
+    if pids[0]: return pids[0]
+    if pids[1]: return pids[1]
+    return None
 
 def hostport_tuple(target):
     def _check_host(host):
