@@ -101,6 +101,8 @@ def _lb_wrapper(func):
             return ''.join(ret)
         elif len(ret) == 1:
             return ret[0]
+        elif len(ret) == 0:     # all of the input are empty strings
+            return None
         else:
             return ret
     wrapper.func_name = func.func_name
