@@ -95,8 +95,11 @@ def _lb_wrapper(func):
                 v = struct.pack(endian + pfs[bits], i % (1 << bits))
                 ret.append(v)
             else:
-                v = struct.unpack(endian + pfs[bits] * (len(i) * 8/bits), i)
-                ret += v
+                if not i: 
+                    ret.append(None)
+                else:
+                    v = struct.unpack(endian + pfs[bits] * (len(i) * 8/bits), i)
+                    ret += v
         if join:
             return ''.join(ret)
         elif len(ret) == 1:
