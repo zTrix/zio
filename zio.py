@@ -796,7 +796,7 @@ class zio(object):
                         # the subprocess may have closed before we get to reading it
                         if e.errno != errno.EIO:
                             raise
-                    if self.debug:
+                    if self.debug and os.isatty(self.wfd):
                         wfd_mode = tty.tcgetattr(self.wfd)
                         log('stdin wfd mode = ' + repr(wfd_mode), f = self.debug)
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
