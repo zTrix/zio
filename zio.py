@@ -1740,6 +1740,7 @@ def cmdline(argv):
 
     kwargs = {
         'stdin': TTY,                     # don't use tty_raw now let's say few people use raw tty in the terminal by hand
+        'stdout': TTY,
     }
     decode = None
     ahead = None
