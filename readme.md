@@ -16,7 +16,7 @@ from zio import *
 # io = zio(('1.2.3.4', 1337))           # used to exploit remote service
 
 io.write(your_awesome_ropchain_or_shellcode)
-# hey, we get a shell!
+# hey, we got an interactive shell!
 io.interact()
 ```
 
@@ -30,6 +30,17 @@ io.interact()
  - Python 2.6, 2.7
  - termcolor (optional, for color support)
     - $ pip install termcolor
+
+## Installation
+
+This is a single-file project so in most cases you can just download [zio.py](https://raw.githubusercontent.com/zTrix/zio/master/zio.py) and start using.
+
+pip is also supported, so you can also install by running 
+
+```bash
+$ pip2 install termcolor # for color support, optional
+$ pip2 install zio
+```
 
 ## Examples
  
