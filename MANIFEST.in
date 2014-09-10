@@ -1,0 +1,2 @@
+include readme.md LICENSE.txt
+recursive-include test *
