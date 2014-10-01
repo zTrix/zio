@@ -1694,7 +1694,7 @@ def usage():
     print """
 usage:
 
-    $ zio.py [options] cmdline | host port
+    $ zio [options] cmdline | host port
 
 options:
 
@@ -1711,22 +1711,22 @@ options:
 
 examples:
 
-    $ zio.py -h
+    $ zio -h
         you are reading this help message
 
-    $ zio.py [-t seconds] [-i [tty|pipe]] [-o [tty|pipe]] "cmdline -x opts and args"
+    $ zio [-t seconds] [-i [tty|pipe]] [-o [tty|pipe]] "cmdline -x opts and args"
         spawning process and interact with it
 
-    $ zio.py [-t seconds] host port
+    $ zio [-t seconds] host port
         zio becomes a netcat
 
-    $ ./zio.py tty
-    $ ./zio.py cat
-    $ ./zio.py vim
-    $ ./zio.py ssh -p 22 root@127.0.0.1
-    $ ./zio.py xxd
-    $ ./zio.py 127.1 22                 # WOW! you can talk with sshd by hand!
-    $ ./zio.py -i pipe ssh root@127.1   # you must be crazy to do this!
+    $ zio tty
+    $ zio cat
+    $ zio vim
+    $ zio ssh -p 22 root@127.0.0.1
+    $ zio xxd
+    $ zio 127.1 22                 # WOW! you can talk with sshd by hand!
+    $ zio -i pipe ssh root@127.1   # you must be crazy to do this!
 """
 
 def cmdline(argv):
