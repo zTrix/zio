@@ -39,7 +39,7 @@
 # THE SOFTWARE.
 #===============================================================================
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 __project__ = "https://github.com/zTrix/zio"
 
 import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc, platform, datetime
@@ -54,7 +54,7 @@ except:
     def colored(text, color=None, on_color=None, attrs=None):
         return text
 
-__all__ = ['stdout', 'log', 'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'EVAL', 'HEX', 'UNHEX', 'BIN', 'UNBIN', 'RAW', 'NONE', 'COLORED', 'PIPE', 'TTY', 'TTY_RAW']
+__all__ = ['stdout', 'log', 'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'EVAL', 'HEX', 'UNHEX', 'BIN', 'UNBIN', 'RAW', 'NONE', 'COLORED', 'PIPE', 'TTY', 'TTY_RAW', 'cmdline']
 
 def stdout(s, color = None, on_color = None, attrs = None):
     if not color:
@@ -1822,8 +1822,7 @@ def cmdline(argv):
         io.write(ahead)
     io.interact(input_filter = decode, raw_rw = False)
 
-if __name__ == '__main__':
-
+def main():
     if len(sys.argv) >= 2:
         test = sys.argv[1]
     else:
@@ -1831,5 +1830,8 @@ if __name__ == '__main__':
         sys.exit(0)
 
     cmdline(sys.argv[1:])
+
+if __name__ == '__main__':
+    main()
 
 # vi:set et ts=4 sw=4 ft=python :

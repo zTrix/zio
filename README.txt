@@ -12,8 +12,10 @@ The following code illustrate the basic idea.
 
     from zio import *
 
-    # io = zio('./buggy-server')            # used for local pwning development
-    # io = zio(('1.2.3.4', 1337))           # used to exploit remote service
+    if you_are_debugging_local_server_binary:
+        io = zio('./buggy-server')            # used for local pwning development
+    elif you_are_pwning_remote_server:
+        io = zio(('1.2.3.4', 1337))           # used to exploit remote service
 
     io.write(your_awesome_ropchain_or_shellcode)
     # hey, we got an interactive shell!
@@ -84,8 +86,8 @@ Thanks (Also references)
  - `sh <https://github.com/amoffat/sh>`_
  - python subprocess module
  - TTY related
-   - http://linux.die.net/man/3/cfmakeraw
-   - http://marcocorvi.altervista.org/games/lkpe/tty/tty.htm
-   - http://www.linusakesson.net/programming/tty/
+    - http://linux.die.net/man/3/cfmakeraw
+    - http://marcocorvi.altervista.org/games/lkpe/tty/tty.htm
+    - http://www.linusakesson.net/programming/tty/
 
 
