@@ -1358,7 +1358,7 @@ class zio(object):
         if extras:
             for e in extras:
                 hints.append(str(e))
-        gdb = colored('zio.py -l 0.5 -b "For help" -a "`printf \'' + '\\r\\n'.join(hints) + '\\r\\n\'`" gdb', 'magenta') + '\nuse cmdline above to attach gdb then press enter to continue ... '
+        gdb = colored('zio -l 0.5 -b "For help" -a "`printf \'' + '\\r\\n'.join(hints) + '\\r\\n\'`" gdb', 'magenta') + '\nuse cmdline above to attach gdb then press enter to continue ... '
         raw_input(gdb)
 
     def _not_impl(self):
