@@ -51,7 +51,23 @@ except ImportError:
 try:
     from termcolor import colored
 except:
+    # if termcolor import failed, use the following v1.1.0 source code of termcolor here
+    # since termcolor use MIT license, SATA license above should be OK
+    ATTRIBUTES = dict( list(zip([ 'bold', 'dark', '', 'underline', 'blink', '', 'reverse', 'concealed' ], list(range(1, 9)))))
+    del ATTRIBUTES['']
+    HIGHLIGHTS = dict( list(zip([ 'on_grey', 'on_red', 'on_green', 'on_yellow', 'on_blue', 'on_magenta', 'on_cyan', 'on_white' ], list(range(40, 48)))))
+    COLORS = dict(list(zip(['grey', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white', ], list(range(30, 38)))))
+    RESET = '\033[0m'
+
     def colored(text, color=None, on_color=None, attrs=None):
+        fmt_str = '\033[%dm%s'
+        if color is not None: text = fmt_str % (COLORS[color], text)
+        if on_color is not None: text = fmt_str % (HIGHLIGHTS[on_color], text)
+        if attrs is not None:
+            for attr in attrs:
+                text = fmt_str % (ATTRIBUTES[attr], text)
+
+        text += RESET
         return text
 
 __all__ = ['stdout', 'log', 'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'EVAL', 'HEX', 'UNHEX', 'BIN', 'UNBIN', 'RAW', 'NONE', 'COLORED', 'PIPE', 'TTY', 'TTY_RAW', 'cmdline']
