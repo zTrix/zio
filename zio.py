@@ -39,10 +39,10 @@
 # THE SOFTWARE.
 #===============================================================================
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 __project__ = "https://github.com/zTrix/zio"
 
-import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc, platform, datetime
+import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc, platform, datetime, inspect
 try:
     from cStringIO import StringIO
 except ImportError:
@@ -209,12 +209,6 @@ class zio(object):
         self.target = target
         self.print_read = print_read
         self.print_write = print_write
-        if self.print_read == True: self.print_read = RAW
-        if self.print_read == False: self.print_read = NONE
-        if self.print_write == True: self.print_write = RAW
-        if self.print_write == False: self.print_write = NONE
-        assert not self.print_read or callable(self.print_read)
-        assert not self.print_write or callable(self.print_write)
 
         if isinstance(timeout, (int, long)) and timeout > 0:
             self.timeout = timeout
@@ -388,6 +382,40 @@ class zio(object):
                 gc.enable()
 
             time.sleep(self.close_delay)
+
+    @property
+    def print_read(self):
+        return self._print_read and (self._print_read is not NONE)
+
+    @print_read.setter
+    def print_read(self, value):
+        if value is True:
+            self._print_read = RAW
+        elif value is False:
+            self._print_read = NONE
+        elif callable(value):
+            self._print_read = value
+        else:
+            raise Exception('bad print_read value')
+
+        assert callable(self._print_read) and len(inspect.getargspec(self._print_read).args) == 1
+ 
+    @property
+    def print_write(self):
+        return self._print_write and (self._print_write is not NONE)
+
+    @print_write.setter
+    def print_write(self, value):
+        if value is True:
+            self._print_write = RAW
+        elif value is False:
+            self._print_write = NONE
+        elif callable(value):
+            self._print_write = value
+        else:
+            raise Exception('bad print_write value')
+
+        assert callable(self._print_write) and len(inspect.getargspec(self._print_write).args) == 1
 
     def __pty_make_controlling_tty(self, tty_fd):
         '''This makes the pseudo-terminal the controlling tty. This should be
@@ -696,7 +724,7 @@ class zio(object):
                         data = self._read(1024)
                         if data:
                             if output_filter: data = output_filter(data)
-                            stdout(raw_rw and data or self.print_read(data))
+                            stdout(raw_rw and data or self._print_read(data))
                         else:       # EOF
                             self.flag_eof = True
                             break
@@ -771,7 +799,7 @@ class zio(object):
                     if data:
                         if output_filter: data = output_filter(data)
                         # already translated by tty, so don't wrap print_write anymore by default, unless raw_rw set to False
-                        stdout(raw_rw and data or self.print_write(data))
+                        stdout(raw_rw and data or self._print_write(data))
                     else:
                         rfdlist.remove(self.wfd)
                 if self.rfd in r:
@@ -784,7 +812,7 @@ class zio(object):
                     if data:
                         if output_filter: data = output_filter(data)
                         # now we are in interact mode, so users want to see things in real, don't wrap things with print_read here by default, unless raw_rw set to False
-                        stdout(raw_rw and data or self.print_read(data))
+                        stdout(raw_rw and data or self._print_read(data))
                     else:
                         rfdlist.remove(self.rfd)
                         self.flag_eof = True
@@ -807,7 +835,7 @@ class zio(object):
                         if not os.isatty(self.wfd):     # we must do the translation when tty does not help
                             data = data.replace('\r', '\n')
                             # also echo back by ourselves, now we are echoing things we input by hand, so there is no need to wrap with print_write by default, unless raw_rw set to False
-                            stdout(raw_rw and data or self.print_write(data))
+                            stdout(raw_rw and data or self._print_write(data))
                         while data != b'' and self.isalive():
                             n = self._write(data)
                             data = data[n:]
@@ -829,7 +857,7 @@ class zio(object):
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
                     if data:
                         if output_filter: data = output_filter(data)
-                        stdout(raw_rw and data or self.print_read(data))
+                        stdout(raw_rw and data or self._print_read(data))
                     else:
                         self.flag_eof = True
                         break
@@ -921,7 +949,7 @@ class zio(object):
     def write(self, s):
         if not s: return 0
         if self.mode() == SOCKET:
-            if self.print_write: stdout(self.print_write(s))
+            if self.print_write: stdout(self._print_write(s))
             self.sock.sendall(s)
             return len(s)
         elif self.mode() == PROCESS:
@@ -936,7 +964,7 @@ class zio(object):
             # 1. input/output will not be cleaner, I mean, they are always in a mess
             # 2. this is a unified interface for pipe/tty write
             # 3. echo back characters will translate control chars into ^@ ^A ^B ^C, ah, ugly!
-            if self.print_write: stdout(self.print_write(s))
+            if self.print_write: stdout(self._print_write(s))
 
             return ret
 
@@ -1313,7 +1341,7 @@ class zio(object):
                 try:
                     if self.wfd in r:
                         data = os.read(self.wfd, 1024)
-                        if self.print_read and data: stdout(self.print_read(data))
+                        if data and self.print_read: stdout(self._print_read(data))
                 except OSError, err:
                     # wfd read EOF (echo back)
                     pass
@@ -1321,7 +1349,7 @@ class zio(object):
             if self.rfd in r:
                 try:
                     s = self._read(size)
-                    if self.print_read and s: stdout(self.print_read(s))
+                    if s and self.print_read: stdout(self._print_read(s))
                 except OSError:
                     # Linux does this
                     self.flag_eof = True
