@@ -177,10 +177,10 @@ class Test(unittest.TestCase):
             io.writeline('user')
             io.read_until('Password: ')   # note the 'stream = sys.stdout' line in userpass.py, which makes this prompt readable here, else Password will be echoed back from stdin(tty), not stdout, so you will never read this!!
             io.writeline('pass')
-            io.end()
             io.readline()
             line = io.readline()
             self.assertEqual(line.strip(), 'Logged in', repr(line))
+            io.end()
 
     def test_xxd(self):
         for io in self.cmdline('xxd', print_write = COLORED(REPR), print_read = COLORED(RAW, 'yellow'), socat_exec = ''):

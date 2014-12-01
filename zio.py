@@ -42,7 +42,7 @@
 __version__ = "1.0.3"
 __project__ = "https://github.com/zTrix/zio"
 
-import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc, platform, datetime, inspect
+import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc, platform, datetime, inspect, atexit
 try:
     from cStringIO import StringIO
 except ImportError:
@@ -201,7 +201,7 @@ def NONE(s): return ''
 
 class zio(object):
 
-    def __init__(self, target, stdin = PIPE, stdout = TTY_RAW, print_read = RAW, print_write = RAW, timeout = 8, cwd = None, env = None, sighup = signal.SIG_IGN, write_delay = 0.05, ignorecase = False, debug = None):
+    def __init__(self, target, stdin = PIPE, stdout = TTY_RAW, print_read = RAW, print_write = RAW, timeout = 8, cwd = None, env = None, sighup = signal.SIG_DFL, write_delay = 0.05, ignorecase = False, debug = None):
         """
         zio is an easy-to-use io library for pwning development, supporting an unified interface for local process pwning and remote tcp socket io
 
@@ -353,7 +353,9 @@ class zio(object):
             max_fd = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
             os.closerange(3, max_fd)
 
-            if self.sighup:         # persist after parent process exits
+            # the following line matters, for example, if SIG_DFL specified and sighup sent when exit, the exitcode of child process can be affected to 1
+            if self.sighup is not None:
+                # note that, self.signal could only be one of (SIG_IGN, SIG_DFL)
                 signal.signal(signal.SIGHUP, self.sighup)
 
             if self.cwd is not None:
@@ -398,6 +400,8 @@ class zio(object):
                 gc.enable()
 
             time.sleep(self.close_delay)
+
+            atexit.register(self.kill, signal.SIGHUP)
 
     @property
     def print_read(self):
