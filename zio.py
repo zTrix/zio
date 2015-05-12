@@ -39,12 +39,13 @@
 # THE SOFTWARE.
 #===============================================================================
 
+from __future__ import print_function
 __version__ = "1.0.3"
 __project__ = "https://github.com/zTrix/zio"
 
 import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc, platform, datetime, inspect, atexit
 try:
-    from cStringIO import StringIO
+    from io import StringIO
 except ImportError:
     from StringIO import StringIO
 
@@ -99,14 +100,14 @@ def log(s, color = None, on_color = None, attrs = None, new_line = True, timesta
     f.flush()
 
 def _lb_wrapper(func):
-    endian = func.func_name[0] == 'l' and '<' or '>'
-    bits = int(func.func_name[1:])
+    endian = func.__name__[0] == 'l' and '<' or '>'
+    bits = int(func.__name__[1:])
     pfs = {8: 'B', 16: 'H', 32: 'I', 64: 'Q'}
     def wrapper(*args):
         ret = []
         join = False
         for i in args:
-            if isinstance(i, (int, long)):
+            if isinstance(i, int):
                 join = True
                 v = struct.pack(endian + pfs[bits], i % (1 << bits))
                 ret.append(v)
@@ -124,7 +125,7 @@ def _lb_wrapper(func):
             return None
         else:
             return ret
-    wrapper.func_name = func.func_name
+    wrapper.__name__ = func.__name__
     return wrapper
 
 @_lb_wrapper
@@ -195,7 +196,7 @@ def EVAL(s):    # now you are not worried about pwning yourself
 def HEX(s): return str(s).encode('hex') + '\r\n'
 def UNHEX(s): s=str(s).strip(); return (len(s) % 2 and '0'+s or s).decode('hex') # hex-strings with odd length are now acceptable
 def BIN(s): return ''.join([format(ord(x),'08b') for x in str(s)]) + '\r\n'
-def UNBIN(s): s=str(s).strip(); return ''.join([chr(int(s[x:x+8],2)) for x in xrange(0,len(s),8)])
+def UNBIN(s): s=str(s).strip(); return ''.join([chr(int(s[x:x+8],2)) for x in range(0,len(s),8)])
 def RAW(s): return str(s)
 def NONE(s): return ''
 
@@ -226,7 +227,7 @@ class zio(object):
         self.print_read = print_read
         self.print_write = print_write
 
-        if isinstance(timeout, (int, long)) and timeout > 0:
+        if isinstance(timeout, int) and timeout > 0:
             self.timeout = timeout
         else:
             self.timeout = 8
@@ -322,7 +323,7 @@ class zio(object):
                 if os.isatty(stdout_slave_fd) and os.isatty(pty.STDIN_FILENO):
                     h, w = self.getwinsize(0)
                     self.setwinsize(stdout_slave_fd, h, w)     # note that this may not be successful
-            except BaseException, ex:
+            except BaseException as ex:
                 if self.debug: log('[ WARN ] setwinsize exception: %s' % (str(ex)), f = self.debug)
 
             # Dup fds for child
@@ -552,8 +553,8 @@ class zio(object):
         ret = ['io-mode: %s' % self.mode(),
                'name: %s' % self.name,
                'timeout: %f' % self.timeout,
-               'write-fd: %d' % (isinstance(self.wfd, (int, long)) and self.wfd or self.fileno()),
-               'read-fd: %d' % (isinstance(self.rfd, (int, long)) and self.rfd or self.fileno()),
+               'write-fd: %d' % (isinstance(self.wfd, int) and self.wfd or self.fileno()),
+               'read-fd: %d' % (isinstance(self.rfd, int) and self.rfd or self.fileno()),
                'buffer(last 100 chars): %r' % (self.buffer[-100:]),
                'eof: %s' % self.flag_eof]
         if self.mode() == SOCKET:
@@ -755,7 +756,7 @@ class zio(object):
                     try:
                         data = None
                         data = os.read(pty.STDIN_FILENO, 1024)
-                    except OSError, e:
+                    except OSError as e:
                         # the subprocess may have closed before we get to reading it
                         if e.errno != errno.EIO:
                             raise
@@ -813,7 +814,7 @@ class zio(object):
                     try:
                         data = None
                         data = os.read(self.wfd, 1024)
-                    except OSError, e:
+                    except OSError as e:
                         if e.errno != errno.EIO:
                             raise
                     if data:
@@ -826,7 +827,7 @@ class zio(object):
                     try:
                         data = None
                         data = os.read(self.rfd, 1024)
-                    except OSError, e:
+                    except OSError as e:
                         if e.errno != errno.EIO:
                             raise
                     if data:
@@ -840,7 +841,7 @@ class zio(object):
                     try:
                         data = None
                         data = os.read(pty.STDIN_FILENO, 1024)
-                    except OSError, e:
+                    except OSError as e:
                         # the subprocess may have closed before we get to reading it
                         if e.errno != errno.EIO:
                             raise
@@ -871,7 +872,7 @@ class zio(object):
                     try:
                         data = None
                         data = os.read(self.rfd, 1024)
-                    except OSError, e:
+                    except OSError as e:
                         if e.errno != errno.EIO:
                             raise
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
@@ -1109,14 +1110,14 @@ class zio(object):
         return lines
 
     def read_until(self, pattern_list, timeout = -1, searchwindowsize = None):
-        if (isinstance(pattern_list, basestring) or
+        if (isinstance(pattern_list, str) or
                 pattern_list in (TIMEOUT, EOF)):
             pattern_list = [pattern_list]
 
         def prepare_pattern(pattern):
             if pattern in (TIMEOUT, EOF):
                 return pattern
-            if isinstance(pattern, basestring):
+            if isinstance(pattern, str):
                 return pattern
             self._pattern_type_err(pattern)
 
@@ -1127,7 +1128,7 @@ class zio(object):
         pattern_list = [prepare_pattern(p) for p in pattern_list]
         matched = self.read_loop(searcher_string(pattern_list), timeout, searchwindowsize)
         ret = self.before
-        if isinstance(self.after, basestring):
+        if isinstance(self.after, str):
             ret += self.after       # after is the matched string, before is the string before this match
         return ret          # be compatible with telnetlib.read_until
 
@@ -1135,7 +1136,7 @@ class zio(object):
         compiled_pattern_list = self.compile_pattern_list(pattern)
         matched = self.read_loop(searcher_re(compiled_pattern_list), timeout, searchwindowsize)
         ret = self.before
-        if isinstance(self.after, basestring):
+        if isinstance(self.after, str):
             ret += self.after
         return ret
 
@@ -1215,12 +1216,7 @@ class zio(object):
     def _pattern_type_err(self, pattern):
         raise TypeError('got {badtype} ({badobj!r}) as pattern, must be one'
                         ' of: {goodtypes}, pexpect.EOF, pexpect.TIMEOUT'\
-                        .format(badtype=type(pattern),
-                                badobj=pattern,
-                                goodtypes=', '.join([str(ast)\
-                                    for ast in basestring])
-                                )
-                        )
+                        .format(badtype=type(pattern), badobj=pattern, goodtypes='str'))
 
     def compile_pattern_list(self, patterns):
 
@@ -1258,7 +1254,7 @@ class zio(object):
             compile_flags = compile_flags | re.IGNORECASE
         compiled_pattern_list = []
         for idx, p in enumerate(patterns):
-            if isinstance(p, basestring):
+            if isinstance(p, str):
                 compiled_pattern_list.append(re.compile(p, compile_flags))
             elif p is EOF:
                 compiled_pattern_list.append(EOF)
@@ -1276,7 +1272,7 @@ class zio(object):
         else:
             try:
                 return self.sock.recv(size)
-            except socket.error, err:
+            except socket.error as err:
                 if err.args[0] == errno.ECONNRESET:
                     raise EOF('Connection reset by peer')
                 raise err
@@ -1362,7 +1358,7 @@ class zio(object):
                     if self.wfd in r:
                         data = os.read(self.wfd, 1024)
                         if data and self.print_read: stdout(self._print_read(data))
-                except OSError, err:
+                except OSError as err:
                     # wfd read EOF (echo back)
                     pass
 
@@ -1736,10 +1732,10 @@ def hostport_tuple(target):
         except:
             return False
 
-    return type(target) == tuple and len(target) == 2 and isinstance(target[1], (int, long)) and target[1] >= 0 and target[1] < 65536 and _check_host(target[0])
+    return type(target) == tuple and len(target) == 2 and isinstance(target[1], int) and target[1] >= 0 and target[1] < 65536 and _check_host(target[0])
 
 def usage():
-    print """
+    print("""
 usage:
 
     $ zio [options] cmdline | host port
@@ -1775,14 +1771,14 @@ examples:
     $ zio xxd
     $ zio 127.1 22                 # WOW! you can talk with sshd by hand!
     $ zio -i pipe ssh root@127.1   # you must be crazy to do this!
-"""
+""")
 
 def cmdline(argv):
     import getopt
     try:
         opts, args = getopt.getopt(argv, 'hi:o:t:r:w:d:a:b:l:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'ahead=', 'before=', 'debug=', 'delay='])
-    except getopt.GetoptError, err:
-        print str(err)
+    except getopt.GetoptError as err:
+        print(str(err))
         usage()
         sys.exit(10)
 
