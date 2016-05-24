@@ -1725,14 +1725,7 @@ def pidof_socket(prog):        # code borrowed from https://github.com/Gallopsle
     return None
 
 def hostport_tuple(target):
-    def _check_host(host):
-        try:
-            socket.gethostbyname(host)
-            return True
-        except:
-            return False
-
-    return type(target) == tuple and len(target) == 2 and isinstance(target[1], int) and target[1] >= 0 and target[1] < 65536 and _check_host(target[0])
+    return type(target) == tuple and len(target) == 2 and isinstance(target[1], int) and target[1] >= 0 and target[1] < 65536
 
 def usage():
     print("""
