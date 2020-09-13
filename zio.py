@@ -103,7 +103,7 @@ params:
             if autopad:
                 arg = arg[:len(arg) // c * c] + (arg[-r:].ljust(c, b'\x00') if endian == '<' else arg[-r:].rjust(c, b'\x00'))
             else:
-                raise Exception('bad input length, expected %s%d, got %d. Use autopad=True or fix length manually' % ('multiple of ' if multiple else ''), c, len(arg))
+                raise ValueError('bad input length, expected multiple of %d, got %d. Fix length manually or use autopad=True' % (c, len(arg)))
         unpacked = struct.unpack(endian + pfs[bits] * (len(arg) // c), arg)
         return list(unpacked) if len(unpacked) > 1 else unpacked[0]
     else:                           # int or [int] -> bytes
