@@ -43,14 +43,19 @@ from __future__ import print_function
 __version__ = "2.0.0"
 __project__ = "https://github.com/zTrix/zio"
 
+__all__ = [
+    'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 
+    'colored',
+]
+
 import os
 import sys
 import struct
 import functools
 try:
-    from io import StringIO
+    from io import BytesIO
 except ImportError:
-    from StringIO import StringIO
+    from StringIO import StringIO as ByteIO
 
 try:
     from termcolor import colored
@@ -79,20 +84,31 @@ except:
 
 def convert_packing(endian, bits, arg, autopad=False):
     """
+given endian, bits spec, do the following
+    convert between bytes <--> int
+    convert between bytes <--> [int]
+
+params:
     endian: < for little endian, > for big endian
     bits: bit size of packing, valid values are 8, 16, 32, 64
     arg: integer or bytes
+    autopad: auto pad input string to required length if needed
     """
     pfs = {8: 'B', 16: 'H', 32: 'I', 64: 'Q'}
-    fmt = endian + pfs[bits]
 
-    if isinstance(arg, int):
-        return struct.pack(fmt, arg % (1 << bits))
-    else:
-        if len(arg) * 8 != bits:
+    if isinstance(arg, bytes):      # bytes -> int or [int]
+        c = bits // 8
+        r = len(arg) % c
+        if r != 0:
             if autopad:
-                arg = arg.ljust(bits//8, b'\x00') if endian == '<' else arg.rjust(bits//8, b'\x00')
-        return struct.unpack(fmt, arg)[0]
+                arg = arg[:len(arg) // c * c] + (arg[-r:].ljust(c, b'\x00') if endian == '<' else arg[-r:].rjust(c, b'\x00'))
+            else:
+                raise Exception('bad input length, expected %s%d, got %d. Use autopad=True or fix length manually' % ('multiple of ' if multiple else ''), c, len(arg))
+        unpacked = struct.unpack(endian + pfs[bits] * (len(arg) // c), arg)
+        return list(unpacked) if len(unpacked) > 1 else unpacked[0]
+    else:                           # int or [int] -> bytes
+        args = list(arg) if isinstance(arg, (list, tuple)) else [arg]
+        return struct.pack(endian + pfs[bits] * len(args), *args)
 
 l8 = functools.partial(convert_packing, '<', 8)
 b8 = functools.partial(convert_packing, '>', 8)
