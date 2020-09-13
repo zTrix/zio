@@ -77,7 +77,7 @@ except:
 # -------------------------------------------------
 # =====> packing/unpacking related functions <=====
 
-def convert_packing(endian, bits, arg):
+def convert_packing(endian, bits, arg, autopad=False):
     """
     endian: < for little endian, > for big endian
     bits: bit size of packing, valid values are 8, 16, 32, 64
@@ -89,6 +89,9 @@ def convert_packing(endian, bits, arg):
     if isinstance(arg, int):
         return struct.pack(fmt, arg % (1 << bits))
     else:
+        if len(arg) * 8 != bits:
+            if autopad:
+                arg = arg.ljust(bits//8, b'\x00') if endian == '<' else arg.rjust(bits//8, b'\x00')
         return struct.unpack(fmt, arg)[0]
 
 l8 = functools.partial(convert_packing, '<', 8)
