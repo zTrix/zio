@@ -45,6 +45,8 @@ __project__ = "https://github.com/zTrix/zio"
 
 import os
 import sys
+import struct
+import functools
 try:
     from io import StringIO
 except ImportError:
@@ -71,5 +73,31 @@ except:
 
         text += RESET
         return text
+
+# -------------------------------------------------
+# =====> packing/unpacking related functions <=====
+
+def convert_packing(endian, bits, arg):
+    """
+    endian: < for little endian, > for big endian
+    bits: bit size of packing, valid values are 8, 16, 32, 64
+    arg: integer or bytes
+    """
+    pfs = {8: 'B', 16: 'H', 32: 'I', 64: 'Q'}
+    fmt = endian + pfs[bits]
+
+    if isinstance(arg, int):
+        return struct.pack(fmt, arg % (1 << bits))
+    else:
+        return struct.unpack(fmt, arg)[0]
+
+l8 = functools.partial(convert_packing, '<', 8)
+b8 = functools.partial(convert_packing, '>', 8)
+l16 = functools.partial(convert_packing, '<', 16)
+b16 = functools.partial(convert_packing, '>', 16)
+l32 = functools.partial(convert_packing, '<', 32)
+b32 = functools.partial(convert_packing, '>', 32)
+l64 = functools.partial(convert_packing, '<', 64)
+b64 = functools.partial(convert_packing, '>', 64)
 
 # vi:set et ts=4 sw=4 ft=python :
