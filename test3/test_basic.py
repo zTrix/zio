@@ -82,6 +82,9 @@ class ZIOTestCase(unittest.TestCase):
 
         self.assertIn(REPR(b'asdf'), b"b'asdf'\r\n", b'b"asdf"\r\n')
 
+        self.assertEqual(EVAL(b'xx\\x33'), b'xx\x33')
+        self.assertEqual(EVAL(b'\\\\x\\tx\\xf1\\r\\n'), b'\\x\tx\xf1\r\n')
+
     def test_socket_io(self):
         server = EchoServer(content=[b'hello world\n', b'\xe4\xbd\xa0\xe5\xa5\xbd\xe4\xb8\x96\xe7\x95\x8c\n'], sleep_after=0.5)
         server.start()
@@ -136,16 +139,16 @@ class ZIOTestCase(unittest.TestCase):
         logfile = BytesIO()
 
         io = zio(server.target_addr(), logfile=logfile, print_read=True, print_write=False)
-        content = io.read_until_timeout(1.5)
+        content = io.read_until_timeout(1.4)
         self.assertEqual(content, b'')
 
         content = io.read_until_timeout(1)
         self.assertEqual(content, b'Welcome to Math World\n')
 
-        content = io.read_until_timeout(1)
+        content = io.read_until_timeout(1.5)
         self.assertEqual(content, b'input:')
 
-        content = io.read_until_timeout(1)
+        content = io.read_until_timeout(2)
         self.assertEqual(content, b'received\n')
 
         io.close()

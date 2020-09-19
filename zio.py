@@ -220,8 +220,43 @@ if sys.version_info.major < 3:
 else:
     def REPR(s): return str(s).encode() + b'\r\n'
 
-# common encoding: utf-8, gbk, latin-1, ascii
-def EVAL(s, encoding='utf-8'): return ast.literal_eval(s.decode(encoding)).encode()
+def EVAL(s):    # now you are not worried about pwning yourself, do not use ast.literal_eval because of 1. encoding issue 2. we only eval string
+    st = 0      # 0 for normal, 1 for escape, 2 for \xXX
+    ret = []
+    i = 0
+    while i < len(s):
+        c = s[i:i+1]    # current byte, for python2/3 compatibility
+        if st == 0:
+            if c == b'\\':
+                st = 1
+            else:
+                ret.append(c)
+        elif st == 1:
+            if c in (b'"', b"'", b"\\", b"t", b"n", b"r"):
+                if c == b't':
+                    ret.append(b'\t')
+                elif c == b'n':
+                    ret.append(b'\n')
+                elif c == b'r':
+                    ret.append(b'\r')
+                else:
+                    ret.append(c)
+                st = 0
+            elif c == b'x':
+                st = 2
+            else:
+                raise ValueError('invalid repr of str %s' % s)
+        else:
+            num = int(s[i:i+2], 16)
+            assert 0 <= num < 256
+            if sys.version_info.major < 3:
+                ret.append(chr(num))
+            else:
+                ret.append(bytes([num]))
+            st = 0
+            i += 1
+        i += 1
+    return b''.join(ret)
 
 def HEX(s): return bytes2hex(s) + b'\r\n'
 TOHEX = HEX
