@@ -462,6 +462,7 @@ class zio(object):
                 return ret
 
     read_exact = read
+
     def read_to_end(self):
         return self.read(size=-1)
 
@@ -472,6 +473,7 @@ class zio(object):
         return content
 
     readline = read_line
+    recvline = read_line    # for pwntools compatibility
 
     def read_until(self, pattern, keep=True):
         '''
@@ -561,11 +563,17 @@ class zio(object):
         self.io.send(byte_buf)
         return len(byte_buf)
 
+    send = write    # for pwntools compatibility
+
     def write_line(self, byte_buf):
         '''
         write byte_buf and a linesep
         '''
         return self.write(byte_buf + os.linesep.encode())
+
+    sendline = write_line
+    send_line = write_line
+    writeline = write_line
 
     def write_lines(self, sequence):
         n = 0
@@ -573,14 +581,28 @@ class zio(object):
             n += self.write_line(s)
         return n
 
+    writelines = write_lines
+
+    def write_after(self, pattern, byte_buf):
+        self.read_until(pattern)
+        self.write(byte_buf)
+
+    writeafter = write_after
+    sendafter = write_after
+
+    def write_line_after(self, pattern, byte_buf):
+        self.read_until(pattern)
+        self.writeline(byte_buf)
+
+    writeline_after = write_line_after  # for human mistake
+    sendline_after = write_line_after   # for human mistake
+    sendlineafter = write_line_after    # for pwntools compatibility
+
     def send_eof(self):
         '''
         notify peer that we have done writing
         '''
         self.io.send_eof()
-
-    writeline = write_line
-    sendline = write_line
 
     def interact(self, read_transform=None, write_transform=None):
         '''
