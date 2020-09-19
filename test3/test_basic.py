@@ -7,7 +7,7 @@ import threading
 import socket
 import unittest
 import time
-from io import StringIO
+from io import BytesIO
 from zio import *
 
 class EchoServer(threading.Thread):
@@ -80,19 +80,19 @@ class ZIOTestCase(unittest.TestCase):
         with self.assertRaises(ValueError):
             unhex('11223', autopad=False)
 
-        self.assertIn(REPR(b'asdf'), "b'asdf'\r\n", 'b"asdf"\r\n')
+        self.assertIn(REPR(b'asdf'), b"b'asdf'\r\n", b'b"asdf"\r\n')
 
     def test_socket_io(self):
         server = EchoServer(content=[b'hello world\n', b'\xe4\xbd\xa0\xe5\xa5\xbd\xe4\xb8\x96\xe7\x95\x8c\n'], sleep_after=0.5)
         server.start()
         time.sleep(0.1)
-        logfile = StringIO()
+        logfile = BytesIO()
 
         io = zio(server.target_addr(), logfile=logfile, print_read=True, print_write=False)
 
         content = io.read(5)
         self.assertEqual(content, b'hello')
-        self.assertEqual(logfile.getvalue(), 'hello')
+        self.assertEqual(logfile.getvalue(), b'hello')
 
         content = io.read(1)
         self.assertEqual(content, b' ')
@@ -100,28 +100,28 @@ class ZIOTestCase(unittest.TestCase):
         content = io.read(5)
         self.assertEqual(content, b'world')
 
-        self.assertEqual(logfile.getvalue(), 'hello world')
+        self.assertEqual(logfile.getvalue(), b'hello world')
 
         content = io.read()
         self.assertEqual(content, b'\n\xe4\xbd\xa0\xe5\xa5\xbd\xe4\xb8\x96\xe7\x95\x8c\n')
 
         io.close()
-        self.assertEqual(logfile.getvalue(), u'hello world\n你好世界\n')
+        self.assertEqual(logfile.getvalue(), 'hello world\n你好世界\n'.encode())
 
     def test_socket_io_read_until(self):
         server = EchoServer(content=[b'Welcome to Math World\n', b'input:', b'received\n'], sleep_between=0.5)
         server.start()
         time.sleep(0.1)
-        logfile = StringIO()
+        logfile = BytesIO()
 
         io = zio(server.target_addr(), logfile=logfile, print_read=True, print_write=False)
         content = io.read_until(b'input:')
         self.assertEqual(content, b'Welcome to Math World\ninput:')
-        self.assertEqual(logfile.getvalue(), 'Welcome to Math World\ninput:')
+        self.assertEqual(logfile.getvalue(), b'Welcome to Math World\ninput:')
 
         line = io.read_line(keep=False)
         self.assertEqual(line, b'received')
-        self.assertEqual(logfile.getvalue(), 'Welcome to Math World\ninput:received\n')
+        self.assertEqual(logfile.getvalue(), b'Welcome to Math World\ninput:received\n')
 
         with self.assertRaises(EOFError):
             io.read_until(b'____')
@@ -133,7 +133,7 @@ class ZIOTestCase(unittest.TestCase):
         server = EchoServer(content=[b'Welcome to Math World\n', b'input:', b'received\n'], sleep_before=2, sleep_between=1)
         server.start()
         time.sleep(0.1)
-        logfile = StringIO()
+        logfile = BytesIO()
 
         io = zio(server.target_addr(), logfile=logfile, print_read=True, print_write=False)
         content = io.read_until_timeout(1.5)
@@ -162,11 +162,11 @@ class ZIOTestCase(unittest.TestCase):
         server = EchoServer(content=[b'Welcome to Math World\n', b'input:', b'received\n'], sleep_between=0.5)
         server.start()
         time.sleep(0.1)
-        logfile = StringIO()
+        logfile = BytesIO()
 
         io = zio(server.target_addr(), logfile=logfile, print_read=False, print_write=True)
         self.assertEqual(io.write(b'asdf'), 4)
-        self.assertEqual(logfile.getvalue(), u'asdf')
+        self.assertEqual(logfile.getvalue(), b'asdf')
 
         io.close()
         self.assertEqual(io.is_closed(), True)

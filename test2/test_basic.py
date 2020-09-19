@@ -106,7 +106,7 @@ class ZIOTestCase(unittest.TestCase):
         self.assertEqual(content, b'\n\xe4\xbd\xa0\xe5\xa5\xbd\xe4\xb8\x96\xe7\x95\x8c\n')
 
         io.close()
-        self.assertEqual(logfile.getvalue(), u'hello world\n你好世界\n')
+        self.assertEqual(logfile.getvalue(), u'hello world\n你好世界\n'.encode('utf-8'))
 
     def test_socket_io_read_until(self):
         server = EchoServer(content=[b'Welcome to Math World\n', b'input:', b'received\n'], sleep_between=0.5)

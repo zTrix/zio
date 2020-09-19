@@ -73,19 +73,18 @@ try:
 except ImportError:
     from StringIO import StringIO as BytesIO
 
-try:
-    from termcolor import colored
-except:
+if True:
+    # termcolor handled using bytes instead of unicode
     # if termcolor import failed, use the following v1.1.0 source code of termcolor here
     # since termcolor use MIT license, SATA license above should be OK
     ATTRIBUTES = dict( list(zip([ 'bold', 'dark', '', 'underline', 'blink', '', 'reverse', 'concealed' ], list(range(1, 9)))))
     del ATTRIBUTES['']
     HIGHLIGHTS = dict( list(zip([ 'on_grey', 'on_red', 'on_green', 'on_yellow', 'on_blue', 'on_magenta', 'on_cyan', 'on_white' ], list(range(40, 48)))))
     COLORS = dict(list(zip(['grey', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white', ], list(range(30, 38)))))
-    RESET = '\033[0m'
+    RESET = b'\033[0m'
 
     def colored(text, color=None, on_color=None, attrs=None):
-        fmt_str = '\033[%dm%s'
+        fmt_str = b'\033[%dm%s'
         if color is not None: text = fmt_str % (COLORS[color], text)
         if on_color is not None: text = fmt_str % (HIGHLIGHTS[on_color], text)
         if attrs is not None:
@@ -217,20 +216,21 @@ def COLORED(f, color='cyan', on_color=None, attrs=None):
 # bytes -> (printable) unicode
 # note: here we use unicode literal to enforce unicode in spite of python2
 if sys.version_info.major < 3:
-    def REPR(s): return u'b' + repr(s) + u'\r\n'
+    def REPR(s): return b'b' + repr(s) + b'\r\n'
 else:
-    def REPR(s): return str(s) + u'\r\n'
+    def REPR(s): return str(s).encode() + b'\r\n'
 
-def EVAL(s): return ast.literal_eval(s.decode(u'latin-1'))
+# common encoding: utf-8, gbk, latin-1, ascii
+def EVAL(s, encoding='utf-8'): return ast.literal_eval(s.decode(encoding)).encode()
 
-def HEX(s): return bytes2hex(s).decode() + u'\r\n'
+def HEX(s): return bytes2hex(s) + b'\r\n'
 TOHEX = HEX
-def UNHEX(s): return hex2bytes(s).decode()
+def UNHEX(s): return hex2bytes(s)
 
 if sys.version_info.major < 3:
-    def BIN(s): return u' '.join([format(ord(x),'08b') for x in str(s)]) + u'\r\n'
+    def BIN(s): return b' '.join([format(ord(x),'08b') for x in str(s)]) + b'\r\n'
 else:
-    def BIN(s): return u' '.join([format(x,'08b') for x in s]) + u'\r\n'
+    def BIN(s): return b' '.join([format(x,'08b').encode() for x in s]) + b'\r\n'
 
 def UNBIN(s, autopad=False):
     s = bytes(filter(lambda x: x in b'01', s))
@@ -242,11 +242,13 @@ def UNBIN(s, autopad=False):
             s = s + (b'0' * extra)
         else:
             raise ValueError('invalid length of 01 bytestring: %d, should be multiple of 8. Use autopad=True to fix automatically' % len(s))
-    return u''.join([unichr(int(s[x:x+8],2)) for x in range(0, len(s), 8)])
+    if sys.version_info.major < 3:
+        return b''.join([chr(int(s[x:x+8],2)) for x in range(0, len(s), 8)])
+    else:
+        return bytes([int(s[x:x+8],2) for x in range(0, len(s), 8)])
 
-# common encoding: utf-8, gbk, latin-1, ascii
-def RAW(s, encoding='utf-8'): return s.decode(encoding)
-def NONE(s): return u''
+def RAW(s): return s
+def NONE(s): return b''
 
 # -------------------------------------------------
 # =====> zio helper functions <=====
@@ -295,7 +297,7 @@ class zio(object):
         sighup=signal.SIG_DFL,
         write_delay=0.05,
         debug=None,
-        logfile=sys.stderr,
+        logfile=None,
     ):
         """
         zio is an easy-to-use io library for pwning development, supporting an unified interface for local process pwning and remote tcp socket io
@@ -318,7 +320,10 @@ class zio(object):
         self.target = target
         self.print_read = print_read
         self.print_write = print_write
-        self.logfile = logfile
+        if logfile is None:
+            self.logfile = sys.stderr
+        else:
+            self.logfile = logfile  # must be opened using 'rb'
 
         # zio object itself is a buffered reader/writer
         self.buffer = bytearray()
@@ -342,7 +347,10 @@ class zio(object):
         '''
         if self.print_read:
             content = self.read_transform(byte_buf)
-            self.logfile.write(content)
+            if hasattr(self.logfile, 'buffer'):
+                self.logfile.buffer.write(content)
+            else:
+                self.logfile.write(content)
             self.logfile.flush()
 
     def log_write(self, byte_buf):
@@ -351,7 +359,10 @@ class zio(object):
         '''
         if self.print_write:
             content = self.write_transform(byte_buf)
-            self.logfile.write(content)
+            if hasattr(self.logfile, 'buffer'):
+                self.logfile.buffer.write(content)
+            else:
+                self.logfile.write(content)
             self.logfile.flush()
 
     @property
@@ -536,11 +547,11 @@ class zio(object):
     writeline = write_line
     sendline = write_line
 
-    def interact(self, encoding='utf-8', read_transform=None, write_transform=None):
+    def interact(self, read_transform=None, write_transform=None):
         '''
         interact with current tty stdin/stdout
         '''
-        self.io.interact(encoding=encoding, read_transform=read_transform, write_transform=write_transform)
+        self.io.interact(read_transform=read_transform, write_transform=write_transform)
 
     interactive = interact      # for pwntools compatibility
 
@@ -623,7 +634,7 @@ class SocketIO:
         self.eof_sent
         self.sock.shutdown(socket.SHUT_WR)
 
-    def interact(self, encoding='utf-8', read_transform=None, write_transform=None):
+    def interact(self, read_transform=None, write_transform=None):
         while not self.is_closed():
             try:
                 r, _w, _e = select_ignoring_useless_signal([self.rfd, pty.STDIN_FILENO], [], [])
@@ -635,7 +646,13 @@ class SocketIO:
                 if data:
                     if read_transform is not None:
                         data = read_transform(data)
-                    sys.stdout.write(data.decode(encoding))
+                    if hasattr(sys.stdout, 'buffer'):
+                        sys.stdout.buffer.write(data)
+                    else:
+                        if sys.version_info.major < 3:
+                            sys.stdout.write(data)
+                        else:
+                            sys.stdout.write(data.decode())
                     sys.stdout.flush()
                 else:       # EOF
                     self.eof_seen = True
@@ -675,6 +692,7 @@ __all__ = [
     'xor', 'bytes2hex', 'hex2bytes', 'tohex', 'unhex',
     'zio',
     'HEX', 'TOHEX', 'UNHEX', 'EVAL', 'REPR', 'RAW', 'NONE',
+    'COLORED',
     'TTY', 'PIPE', 'TTY_RAW',
 ]
 
