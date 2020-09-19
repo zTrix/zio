@@ -953,8 +953,9 @@ class ProcessIO:
             return None
         return b
 
-    def send(self, buf):
-        time.sleep(self.write_delay)
+    def send(self, buf, delay=True):
+        if delay:       # prevent write too fast
+            time.sleep(self.write_delay)
         return os.write(self.wfd, buf)
 
     def send_eof(self, force_close=False):
@@ -1067,7 +1068,7 @@ class ProcessIO:
                             # also echo back by ourselves, now we are echoing things we input by hand, so there is no need to wrap with print_write by default, unless raw_rw set to False
                             write_stdout(data)
                         while data != b'' and self._isalive():
-                            n = self.send(data)
+                            n = self.send(data, delay=False)
                             data = data[n:]
                     else:
                         self.send_eof(force_close=True)
@@ -1393,8 +1394,153 @@ class ProcessIO:
         mode[tty.CC][tty.VTIME] = 0
         tty.tcsetattr(fd, when, mode)
 
+# -------------------------------------------------
+# =====> command line usage as a standalone app <=====
 
-# export useful things
+def usage():
+    print("""
+usage:
+
+    $ zio [options] cmdline | host port
+
+options:
+
+    -h, --help              help page, you are reading this now!
+    -i, --stdin             tty|pipe, specify tty or pipe stdin, default to tty
+    -o, --stdout            tty|pipe, specify tty or pipe stdout, default to tty
+    -t, --timeout           integer seconds, specify timeout
+    -r, --read              how to print out content read from child process, may be RAW(True), NONE(False), REPR, HEX
+    -w, --write             how to print out content written to child process, may be RAW(True), NONE(False), REPR, HEX
+    -a, --ahead             message to feed into stdin before interact
+    -b, --before            don't do anything before reading those input
+    -d, --decode            when in interact mode, this option can be used to specify decode function REPR/HEX to input raw hex bytes
+    -l, --delay             write delay, time to wait before write
+
+examples:
+
+    $ zio -h
+        you are reading this help message
+
+    $ zio [-t seconds] [-i [tty|pipe]] [-o [tty|pipe]] "cmdline -x opts and args"
+        spawning process and interact with it
+
+    $ zio [-t seconds] host port
+        zio becomes a netcat
+
+    $ zio tty
+    $ zio cat
+    $ zio vim
+    $ zio ssh -p 22 root@127.0.0.1
+    $ zio xxd
+    $ zio 127.1 22                 # WOW! you can talk with sshd by hand!
+    $ zio -i pipe ssh root@127.1   # you must be crazy to do this!
+""")
+
+def cmdline(argv):
+    import getopt       # use getopt for better compatibility, argparse is not introduced until python2.7
+    try:
+        opts, args = getopt.getopt(argv, 'hi:o:t:r:w:d:a:b:l:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'ahead=', 'before=', 'debug=', 'delay='])
+    except getopt.GetoptError as err:
+        print(str(err))
+        usage()
+        sys.exit(10)
+
+    kwargs = {
+        'stdin': TTY,                     # don't use tty_raw now let's say few people use raw tty in the terminal by hand
+        'stdout': TTY,
+    }
+    decode = None
+    ahead = None
+    before = None
+    for o, a in opts:
+        if o in ('-h', '--help'):
+            usage()
+            sys.exit(0)
+        elif o in ('-i', '--stdin'):
+            if a.lower() == TTY.lower():
+                kwargs['stdin'] = TTY
+            elif a.lower() == TTY_RAW.lower():
+                kwargs['stdin'] = TTY_RAW
+            else:
+                kwargs['stdin'] = PIPE
+        elif o in ('-o', '--stdout'):
+            if a.lower() == PIPE.lower():
+                kwargs['stdout'] = PIPE
+            elif a.lower() == TTY_RAW.lower():
+                kwargs['stdout'] = TTY_RAW
+            else:
+                kwargs['stdout'] = TTY
+        elif o in ('-t', '--timeout'):
+            try:
+                kwargs['timeout'] = int(a)
+            except:
+                usage()
+                sys.exit(11)
+        elif o in ('-r', '--read'):
+            if a.lower() == 'hex':
+                kwargs['print_read'] = COLORED(HEX, 'yellow')
+            elif a.lower() == 'repr':
+                kwargs['print_read'] = COLORED(REPR, 'yellow')
+            elif a.lower() == 'none':
+                kwargs['print_read'] = NONE
+            else:
+                kwargs['print_read'] = RAW
+        elif o in ('-w', '--write'):
+            if a.lower() == 'hex':
+                kwargs['print_write'] = COLORED(HEX, 'cyan')
+            elif a.lower() == 'repr':
+                kwargs['print_write'] = COLORED(REPR, 'cyan')
+            elif a.lower() == 'none':
+                kwargs['print_write'] = NONE
+            else:
+                kwargs['print_write'] = RAW
+        elif o in ('-d', '--decode'):
+            if a.lower() == 'eval':
+                decode = EVAL
+            elif a.lower() == 'unhex':
+                decode = UNHEX
+        elif o in ('-a', '--ahead'):
+            ahead = a
+        elif o in ('-b', '--before'):
+            before = a
+        elif o in ('--debug',):
+            kwargs['debug'] = open(a, 'w')
+        elif o in ('-l', '--delay'):
+            kwargs['write_delay'] = float(a)
+
+    target = None
+    if len(args) == 2:
+        try:
+            port = int(args[1])
+            if is_hostport_tuple((args[0], port)):
+                target = (args[0], port)
+        except:
+            pass
+    if not target:
+        if len(args) == 1:
+            target = args[0]
+        else:
+            target = args
+
+    io = zio(target, **kwargs)
+    if before:
+        io.read_until(before)
+    if ahead:
+        io.write(ahead)
+    io.interact(read_transform=decode)
+
+def main():
+    if len(sys.argv) < 2:
+        usage()
+        sys.exit(0)
+
+    cmdline(sys.argv[1:])
+
+if __name__ == '__main__':
+    main()
+
+# -------------------------------------------------
+# =====> export useful objects and functions <=====
 
 __all__ = [
     'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'convert_packing',
