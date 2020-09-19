@@ -129,6 +129,27 @@ class ZIOTestCase(unittest.TestCase):
         io.read()
         io.close()
 
+    def test_socket_io_read_until_timeout(self):
+        server = EchoServer(content=[b'Welcome to Math World\n', b'input:', b'received\n'], sleep_before=2, sleep_between=1)
+        server.start()
+        time.sleep(0.1)
+        logfile = StringIO()
+
+        io = zio(server.target_addr(), logfile=logfile, print_read=True, print_write=False)
+        content = io.read_until_timeout(1.5)
+        self.assertEqual(content, b'')
+
+        content = io.read_until_timeout(1)
+        self.assertEqual(content, b'Welcome to Math World\n')
+
+        content = io.read_until_timeout(1)
+        self.assertEqual(content, b'input:')
+
+        content = io.read_until_timeout(1)
+        self.assertEqual(content, b'received\n')
+
+        io.close()
+
     def test_match_pattern(self):
         self.assertEqual(match_pattern(b'study', b'good good study, day day up'), (10, 15))
         self.assertEqual(match_pattern(re.compile(b'study'), b'good good study, day day up'), (10, 15))
