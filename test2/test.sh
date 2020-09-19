@@ -6,4 +6,4 @@ cd "${0%/*}" && pwd
 
 PYTHON=`which python2`
 
-$PYTHON ./test_packing.py
+$PYTHON ./test_basic.py

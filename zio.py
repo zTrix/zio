@@ -258,6 +258,7 @@ class zio(object):
         self.target = target
         self.print_read = print_read
         self.print_write = print_write
+        self.logfile = logfile
 
         # zio object itself is a buffered reader/writer
         self.buffer = bytearray()
@@ -275,22 +276,57 @@ class zio(object):
             # do process io
             raise NotImplementedError
 
+    def log_read(self, byte_buf):
+        '''
+        bytes -> IO unicode
+        '''
+        if self.print_read:
+            content = self.read_transform(byte_buf)
+            self.logfile.write(content)
+            self.logfile.flush()
+
+    def log_write(self, byte_buf):
+        '''
+        bytes -> IO unicode
+        '''
+        if self.print_write:
+            content = self.write_transform(byte_buf)
+            self.logfile.write(content)
+            self.logfile.flush()
+
     @property
     def print_read(self):
-        return self._print_read and (self._print_read is not NONE)
+        return self.read_transform is not None and self.read_transform is not NONE
 
     @print_read.setter
     def print_read(self, value):
         if value == True:
-            self._print_read = RAW
+            self.read_transform = RAW
         elif value == False:
-            self._print_read = NONE
+            self.read_transform = NONE
         elif callable(value):
-            self._print_read = value
+            self.read_transform = value
         else:
             raise ValueError('bad print_read value')
         
-        assert callable(self._print_read)
+        assert callable(self.read_transform)
+
+    @property
+    def print_write(self):
+        return self.write_transform is not None and self.write_transform is not NONE
+
+    @print_write.setter
+    def print_write(self, value):
+        if value == True:
+            self.write_transform = RAW
+        elif value == False:
+            self.write_transform = NONE
+        elif callable(value):
+            self.write_transform = value
+        else:
+            raise ValueError('bad print_read value')
+        
+        assert callable(self.write_transform)
 
     def read(self, size=None):
         '''
@@ -306,6 +342,7 @@ class zio(object):
                     if is_read_all:
                         ret = bytes(self.buffer)
                         self.buffer.clear()
+                        self.log_read(ret)
                         return ret
                     else:
                         raise Exception('EOF occured before full size read, buffer = %s' % self.buffer)
@@ -314,8 +351,7 @@ class zio(object):
             if not is_read_all and len(self.buffer) >= size:
                 ret = bytes(self.buffer[:size])
                 self.buffer = self.buffer[size:]
-                # if self.print_read:
-
+                self.log_read(ret)
                 return ret
 
     read_exact = read

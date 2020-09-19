@@ -1,13 +1,16 @@
+#!/usr/bin/env python3
+import random
 import threading
 import socket
 import unittest
+from io import StringIO
 from zio import *
 
 class ServerSock(threading.Thread):
     def __init__(self, addr=None, port=None):
         threading.Thread.__init__(self, name='ServerSock')
         self.addr = addr or '127.0.0.1'
-        self.port = port or 9527
+        self.port = port or random.choice(range(9527, 10000))
         self.setDaemon(True)
 
     def run(self):
@@ -61,16 +64,21 @@ class ZIOTestCase(unittest.TestCase):
         server = ServerSock()
         server.start()
 
-        io = zio(server.target_addr())
+        logfile = StringIO()
+
+        io = zio(server.target_addr(), logfile=logfile, print_read=True, print_write=False)
 
         content = io.read(5)
         self.assertEqual(content, b'hello')
+        self.assertEqual(logfile.getvalue(), 'hello')
 
         content = io.read(1)
         self.assertEqual(content, b' ')
 
         content = io.read(5)
         self.assertEqual(content, b'world')
+
+        self.assertEqual(logfile.getvalue(), 'hello world')
 
         io.close()
 
