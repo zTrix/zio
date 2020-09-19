@@ -8,6 +8,7 @@ class ServerSock(threading.Thread):
         threading.Thread.__init__(self, name='ServerSock')
         self.addr = addr or '127.0.0.1'
         self.port = port or 9527
+        self.setDaemon(True)
 
     def run(self):
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -39,6 +40,22 @@ class ZIOTestCase(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             b32(b'\x00\x00\x00\x00\x01\x00\x00\x00\x02')
+
+    def test_encoding(self):
+        a = b"\xd8;:Dx-;Fx)=Yx%'L(*6\x01797Sx;:Dx#3[!o6N?\xb0"
+        b = b'XOR!'
+
+        self.assertEqual(xor(a, b), b'\x80the big fox jumped over the lazy dog\xff')
+
+        self.assertEqual(tohex(b'\xde\xad\xbe\xaf'), b'deadbeaf')
+        self.assertEqual(unhex('deadbeaf'), b'\xde\xad\xbe\xaf')
+
+        self.assertEqual(unhex('11223', autopad='right'), b'\x11\x22\x30')
+        self.assertEqual(unhex('11223', autopad='left'), b'\x01\x12\x23')
+        with self.assertRaises(ValueError):
+            unhex('11223', autopad=False)
+
+        self.assertIn(REPR(b'asdf'), "b'asdf'\r\n", 'b"asdf"\r\n')
 
     def test_socket_io(self):
         server = ServerSock()

@@ -40,6 +40,8 @@
 #===============================================================================
 
 from __future__ import print_function
+from __future__ import division
+
 __version__ = "2.0.0"
 __project__ = "https://github.com/zTrix/zio"
 
@@ -49,6 +51,16 @@ import struct
 import functools
 import socket
 import signal
+import ast
+import binascii
+
+# python2 python3 shim
+if sys.version_info.major < 3:
+    input = raw_input           # pylint: disable=undefined-variable
+else:
+    unicode = str
+    unichr = chr
+
 try:
     from io import BytesIO
 except ImportError:
@@ -119,11 +131,50 @@ b64 = functools.partial(convert_packing, '>', 64)
 # -------------------------------------------------
 # =====> utility functions <=====
 
-# TODO: hex/unhex/xor some encoding functions
+def bytes2hex(s):
+    '''
+    Union{bytes, unicode} -> bytes
+    '''
+    if isinstance(s, unicode):
+        s = s.encode()
+    return binascii.hexlify(s)
+
+def hex2bytes(s, autopad=False):
+    '''
+    bytes -> bytes
+    '''
+    if isinstance(s, unicode):
+        s = s.encode()
+    s = s.strip()
+    if len(s) % 2 == 1:
+        if autopad == 'left' or autopad == True:
+            s = b'0' + s
+        elif autopad == 'right':
+            s = s + b'0'
+        else:
+            raise ValueError('invalid length of hex bytes: %d, should be multiple of 2. Use autopad=True to fix automatically' % len(s))
+    return binascii.unhexlify(s)
+
+tohex = bytes2hex
+unhex = hex2bytes
+
+if sys.version_info.major < 3:
+    def xor(a, b):
+        '''
+        bytes -> bytes -> bytes
+        the first param a must be longer than or equal to the length of the second param
+        '''
+        return b''.join([chr(ord(c) ^ ord(b[i % len(b)])) for i, c in enumerate(a)])
+else:
+    def xor(a, b):
+        '''
+        bytes -> bytes -> bytes
+        the first param a must be longer than or equal to the length of the second param
+        '''
+        return bytes([c ^ b[i % len(b)] for i, c in enumerate(a)])
 
 def is_hostport_tuple(target):
     return type(target) == tuple and len(target) == 2 and isinstance(target[1], int) and target[1] >= 0 and target[1] < 65536
-
 
 # -------------------------------------------------
 # =====> zio class <=====
@@ -134,6 +185,42 @@ TTY_RAW = 'ttyraw'      # io mode (process io): send all characters just untouch
 
 def COLORED(f, color='cyan', on_color=None, attrs=None):
     return lambda s : colored(f(s), color, on_color, attrs)
+
+# read/write transform functions
+# bytes -> (printable) unicode
+# note: here we use unicode literal to enforce unicode in spite of python2
+if sys.version_info.major < 3:
+    def REPR(s): return u'b' + repr(s) + u'\r\n'
+else:
+    def REPR(s): return str(s) + u'\r\n'
+
+def EVAL(s): return ast.literal_eval(s.decode(u'latin-1'))
+
+def HEX(s): return bytes2hex(s).decode() + u'\r\n'
+TOHEX = HEX
+def UNHEX(s): return hex2bytes(s).decode()
+
+if sys.version_info.major < 3:
+    def BIN(s): return u' '.join([format(ord(x),'08b') for x in str(s)]) + u'\r\n'
+else:
+    def BIN(s): return u' '.join([format(x,'08b') for x in s]) + u'\r\n'
+
+def UNBIN(s, autopad=False):
+    s = bytes(filter(lambda x: x in b'01', s))
+    if len(s) % 8 != 0:
+        extra = 8 - len(s) % 8
+        if autopad == 'left' or autopad == True:
+            s = (b'0' * extra) + s
+        elif autopad == 'right':
+            s = s + (b'0' * extra)
+        else:
+            raise ValueError('invalid length of 01 bytestring: %d, should be multiple of 8. Use autopad=True to fix automatically' % len(s))
+    return u''.join([unichr(int(s[x:x+8],2)) for x in range(0, len(s), 8)])
+
+# common encoding: utf-8, gbk, latin-1, ascii
+def RAW(s, encoding='utf-8'): return s.decode(encoding)
+def NONE(s): return u''
+
 
 class zio(object):
     
@@ -148,6 +235,7 @@ class zio(object):
         sighup=signal.SIG_DFL,
         write_delay=0.05,
         debug=None,
+        logfile=sys.stderr,
     ):
         """
         zio is an easy-to-use io library for pwning development, supporting an unified interface for local process pwning and remote tcp socket io
@@ -187,6 +275,23 @@ class zio(object):
             # do process io
             raise NotImplementedError
 
+    @property
+    def print_read(self):
+        return self._print_read and (self._print_read is not NONE)
+
+    @print_read.setter
+    def print_read(self, value):
+        if value == True:
+            self._print_read = RAW
+        elif value == False:
+            self._print_read = NONE
+        elif callable(value):
+            self._print_read = value
+        else:
+            raise ValueError('bad print_read value')
+        
+        assert callable(self._print_read)
+
     def read(self, size=None):
         '''
         if size is -1 or None, then read all bytes available until EOF
@@ -209,6 +314,8 @@ class zio(object):
             if not is_read_all and len(self.buffer) >= size:
                 ret = bytes(self.buffer[:size])
                 self.buffer = self.buffer[size:]
+                # if self.print_read:
+
                 return ret
 
     read_exact = read
@@ -270,9 +377,12 @@ class SocketIO:
 # export useful things
 
 __all__ = [
-    'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 
+    'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'convert_packing',
     'colored',
+    'xor', 'bytes2hex', 'hex2bytes', 'tohex', 'unhex',
     'zio',
+    'HEX', 'TOHEX', 'UNHEX', 'EVAL', 'REPR', 'RAW', 'NONE',
+    'TTY', 'PIPE', 'TTY_RAW',
 ]
 
 # vi:set et ts=4 sw=4 ft=python :
