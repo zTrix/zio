@@ -471,6 +471,40 @@ class zio(object):
 
     recv = read_some
 
+    def read_until_timeout(self, timeout=1):
+        '''
+        read for some timeout, return current buffer plus whatever read
+        '''
+        end_time = time.time() + timeout
+
+        while True:
+            r, _w, _e = select_ignoring_useless_signal([self.io.rfd], [], [], timeout)
+            data = None
+            if self.io.rfd in r:
+                data = self.io.recv(1536)
+                if data is None:
+                    break
+                elif data:
+                    self.buffer.extend(data)
+                    break
+
+            timeout = end_time - time.time()
+            if timeout < 0:
+                break
+
+        if len(self.buffer):
+            ret = bytes(self.buffer)
+            self.log_read(ret)
+            self.buffer = bytearray()
+            return ret
+        return b''
+
+    def readable(self):
+        '''
+        tell wether we have some data to read
+        '''
+        return select_ignoring_useless_signal([self.io.rfd], [], [], 0) == ([self.io.rfd], [], [])
+
     def write(self, byte_buf):
         '''
         write/sendall bytes and flush them all
@@ -539,6 +573,12 @@ class zio(object):
         kept to act like a file-like object
         '''
         pass
+
+    def fileno(self):
+        '''
+        return underlying os fileno, act like a file-like object
+        '''
+        return self.io.rfd
 
     def mode(self):
         return self.io.mode
