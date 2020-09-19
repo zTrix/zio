@@ -1,6 +1,8 @@
 #!/usr/bin/env python2
 # encoding: utf-8
-
+import os
+import sys
+import re
 import random
 import time
 import threading
@@ -85,7 +87,7 @@ class ZIOTestCase(unittest.TestCase):
     def test_socket_io(self):
         server = EchoServer(content=[b'hello world\n', b'\xe4\xbd\xa0\xe5\xa5\xbd\xe4\xb8\x96\xe7\x95\x8c\n'])
         server.start()
-
+        time.sleep(0.1)
         logfile = StringIO()
 
         io = zio(server.target_addr(), logfile=logfile, print_read=True, print_write=False)
@@ -105,6 +107,35 @@ class ZIOTestCase(unittest.TestCase):
 
         io.close()
         self.assertEqual(logfile.getvalue(), u'hello world\n你好世界\n')
+
+    def test_socket_io_read_until(self):
+        server = EchoServer(content=[b'Welcome to Math World\n', b'input:', b'received\n'], sleep_between=0.5)
+        server.start()
+        time.sleep(0.1)
+        logfile = StringIO()
+
+        io = zio(server.target_addr(), logfile=logfile, print_read=True, print_write=False)
+        content = io.read_until(b'input:')
+        self.assertEqual(content, b'Welcome to Math World\ninput:')
+        self.assertEqual(logfile.getvalue(), 'Welcome to Math World\ninput:')
+
+        line = io.read_line(keep=False)
+        self.assertEqual(line, b'received')
+        self.assertEqual(logfile.getvalue(), 'Welcome to Math World\ninput:received\n')
+
+        with self.assertRaises(EOFError):
+            io.read_until(b'____')
+
+        io.read()
+        io.close()
+
+    def test_match_pattern(self):
+        self.assertEqual(match_pattern(b'study', b'good good study, day day up'), (10, 15))
+        self.assertEqual(match_pattern(re.compile(b'study'), b'good good study, day day up'), (10, 15))
+        self.assertEqual(match_pattern(lambda x: (x.find(b'study'), x.find(b'study')+5), b'good good study, day day up'), (10, 15))
+
+        self.assertEqual(match_pattern(b'wont be found', b'asfasdasd'), (-1, -1))
+        self.assertEqual(match_pattern(re.compile(b'study'), b'good good good good'), (-1, -1))
 
 if __name__ == '__main__':
     unittest.main(verbosity=2, failfast=True)

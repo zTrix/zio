@@ -176,6 +176,26 @@ else:
 def is_hostport_tuple(target):
     return type(target) == tuple and len(target) == 2 and isinstance(target[1], int) and target[1] >= 0 and target[1] < 65536
 
+def match_pattern(pattern, byte_buf):
+    '''
+    pattern -> byte_buf -> index span # (-1, -1) for not found)
+    pattern could be bytes or re objects or lambda function which returns index span
+    '''
+    if isinstance(pattern, bytes):
+        i = byte_buf.find(pattern)
+        if i > -1:
+            return (i, i + len(pattern))
+        else:
+            return (-1, -1)
+    elif hasattr(pattern, 'match') and hasattr(pattern, 'search'):
+        mo = pattern.search(byte_buf)
+        if not mo:
+            return (-1, -1)
+        else:
+            return mo.span()
+    elif callable(pattern):
+        return pattern(byte_buf)
+
 # -------------------------------------------------
 # =====> zio class <=====
 
@@ -253,7 +273,7 @@ class zio(object):
         """
 
         if not target:
-            raise Exception('cmdline or socket not provided for zio, try zio("ls -l")')
+            raise ValueError('cmdline or socket not provided for zio, try zio("ls -l")')
 
         self.target = target
         self.print_read = print_read
@@ -332,7 +352,7 @@ class zio(object):
         '''
         if size is -1 or None, then read all bytes available until EOF
         if size is a positive integer, read exactly `size` bytes and return
-        raise Exception if EOF occurred before full size read
+        raise EOFError if EOF occurred before full size read
         '''
         is_read_all = size is None or size < 0
         while True:
@@ -346,7 +366,7 @@ class zio(object):
                         self.log_read(ret)
                         return ret
                     else:
-                        raise Exception('EOF occured before full size read, buffer = %s' % self.buffer)
+                        raise EOFError('EOF occured before full size read, buffer = %s' % self.buffer)
                 self.buffer.extend(incoming)
 
             if not is_read_all and len(self.buffer) >= size:
@@ -359,26 +379,87 @@ class zio(object):
     def read_to_end(self):
         return self.read(size=-1)
 
-    def read_line(self):
-        pass
+    def read_line(self, keep=True):
+        content = self.read_until(b'\n', keep=True)
+        if keep==False:
+            content = content.rstrip(b'\r\n')
+        return content
 
     readline = read_line
 
-    def read_until(self, keep=True):
+    def read_until(self, pattern, keep=True):
         '''
+        read until some bytes pattern found
+        patter could be one of following:
+        1. bytes
+        2. re object(must compile using bytes rather than unicode, e.g: re.compile(b"something"))
+        3. callable functions return True for found and False for not found
+        4. lists of things above
+
+        raise EOFError if EOF occurred before pattern found
         '''
-        pass
+
+        if not isinstance(pattern, (list, tuple)):
+            pattern_list = [pattern]
+        else:
+            pattern_list = pattern
+
+        while True:
+            for p in pattern_list:
+                span = match_pattern(p, self.buffer)
+                if span[0] > -1: # found
+                    ret = self.buffer[:span[1]] if keep == True else self.buffer[:span[0]]
+                    self.log_read(self.buffer[:span[1]])
+                    self.buffer = self.buffer[span[1]:]
+                    return ret
+
+            incoming = self.io.recv(1536)
+            if incoming is None:
+                raise EOFError('EOF occured before pattern match, buffer = %s' % self.buffer)
+
+            self.buffer.extend(incoming)
 
     readuntil = read_until
+    recv_until = read_until
+    recvuntil = read_until
 
     def read_some(self, size=None):
         '''
         just read 1 or more available bytes (less than size) and return
         '''
-        pass
+        return self.io.recv(size)
+
+    recv = read_some
 
     def close(self):
+        '''
+        close underlying io and free all resources
+        '''
         self.io.close()
+
+    def is_closed(self):
+        '''
+        tell whether this zio object is closed
+        '''
+        return self.io.is_closed()
+
+    def is_eof_seen(self):
+        '''
+        tell whether we have received EOF from peer end
+        '''
+        raise NotImplementedError
+
+    def is_eof_sent(self):
+        '''
+        tell whether we have sent EOF to the peer 
+        '''
+        raise NotImplementedError
+
+    def flush(self):
+        '''
+        kept to act like a file-like object
+        '''
+        pass
 
 class SocketIO:
     def __init__(self, target, timeout=None):
@@ -387,6 +468,8 @@ class SocketIO:
             self.sock = target
         else:
             self.sock = socket.create_connection(target, self.timeout)
+
+        self.eof_seen = False
 
     @property
     def rfd(self):
@@ -400,9 +483,11 @@ class SocketIO:
         '''
         recv 1 or more available bytes then return
         return None to indicate EOF
+        since we use b'' to indicate empty string in case of timeout, so do not return b'' for EOF
         '''
         b = self.sock.recv(size)
         if not b:
+            self.eof_seen = True
             return None
         return b
 
@@ -412,6 +497,9 @@ class SocketIO:
     def close(self):
         self.sock.close()
 
+    def is_closed(self):
+        return self.sock._closed
+
     def __repr__(self):
         return repr(self.sock)
 
@@ -420,6 +508,7 @@ class SocketIO:
 __all__ = [
     'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'convert_packing',
     'colored',
+    'match_pattern',
     'xor', 'bytes2hex', 'hex2bytes', 'tohex', 'unhex',
     'zio',
     'HEX', 'TOHEX', 'UNHEX', 'EVAL', 'REPR', 'RAW', 'NONE',
