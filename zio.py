@@ -52,7 +52,11 @@ import functools
 import socket
 import signal
 import ast
+import time
+import errno
+import select
 import binascii
+import pty
 
 # we want to keep zio as a zero-dependency single-file easy-to-use library, and even more, work across python2/python3 boundary
 # https://python-future.org/compatible_idioms.html#unicode-text-string-literals
@@ -200,7 +204,7 @@ def match_pattern(pattern, byte_buf):
         return pattern(byte_buf)
 
 # -------------------------------------------------
-# =====> zio class <=====
+# =====> zio class modes and params <=====
 
 PIPE = 'pipe'           # io mode (process io): send all characters untouched, but use PIPE, so libc cache may apply
 TTY = 'tty'             # io mode (process io): normal tty behavier, support Ctrl-C to terminate, and auto \r\n to display more readable lines for human
@@ -244,8 +248,41 @@ def UNBIN(s, autopad=False):
 def RAW(s, encoding='utf-8'): return s.decode(encoding)
 def NONE(s): return u''
 
+# -------------------------------------------------
+# =====> zio helper functions <=====
 
+def select_ignoring_useless_signal(iwtd, owtd, ewtd, timeout=None):
+    '''This is a wrapper around select.select() that ignores signals. If
+    select.select raises a select.error exception and errno is an EINTR
+    error then it is ignored. Mainly this is used to ignore sigwinch
+    (terminal resize). '''
+
+    # if select() is interrupted by a signal (errno==EINTR) then
+    # we loop back and enter the select() again.
+    if timeout is not None:
+        end_time = time.time() + timeout
+    while True:
+        try:
+            return select.select(iwtd, owtd, ewtd, timeout)
+        except select.error:
+            err = sys.exc_info()[1]
+            if err[0] == errno.EINTR:
+                # if we loop back we have to subtract the
+                # amount of time we already waited.
+                if timeout is not None:
+                    timeout = end_time - time.time()
+                    if timeout < 0:
+                        return([], [], [])
+            else:
+                # something else caused the select.error, so
+                # this actually is an exception.
+                raise
+
+# zio class here
 class zio(object):
+    '''
+    zio: unified io interface for both socket io and process io
+    '''
     
     def __init__(self, target,
         stdin=PIPE,
@@ -465,6 +502,14 @@ class zio(object):
     writeline = write_line
     sendline = write_line
 
+    def interact(self, encoding='utf-8', read_transform=None, write_transform=None):
+        '''
+        interact with current tty stdin/stdout
+        '''
+        self.io.interact(encoding=encoding, read_transform=read_transform, write_transform=write_transform)
+
+    interactive = interact      # for pwntools compatibility
+
     def close(self):
         '''
         close underlying io and free all resources
@@ -481,13 +526,13 @@ class zio(object):
         '''
         tell whether we have received EOF from peer end
         '''
-        raise NotImplementedError
+        return self.io.eof_seen
 
     def is_eof_sent(self):
         '''
         tell whether we have sent EOF to the peer 
         '''
-        raise NotImplementedError
+        return self.io.eof_sent
 
     def flush(self):
         '''
@@ -495,7 +540,12 @@ class zio(object):
         '''
         pass
 
+    def mode(self):
+        return self.io.mode
+
 class SocketIO:
+    mode = 'socket'
+
     def __init__(self, target, timeout=None):
         self.timeout = timeout
         if isinstance(target, socket.socket):
@@ -504,6 +554,7 @@ class SocketIO:
             self.sock = socket.create_connection(target, self.timeout)
 
         self.eof_seen = False
+        self.eof_sent = False
 
     @property
     def rfd(self):
@@ -529,14 +580,46 @@ class SocketIO:
         return self.sock.sendall(buf)
 
     def send_eof(self):
+        self.eof_sent
         self.sock.shutdown(socket.SHUT_WR)
 
+    def interact(self, encoding='utf-8', read_transform=None, write_transform=None):
+        while not self.is_closed():
+            try:
+                r, _w, _e = select_ignoring_useless_signal([self.rfd, pty.STDIN_FILENO], [], [])
+            except KeyboardInterrupt:
+                break
+            data = None
+            if self.rfd in r:
+                data = self.recv(1024)
+                if data:
+                    if read_transform is not None:
+                        data = read_transform(data)
+                    sys.stdout.write(data.decode(encoding))
+                    sys.stdout.flush()
+                else:       # EOF
+                    self.eof_seen = True
+                    break
+            if pty.STDIN_FILENO in r:
+                try:
+                    data = os.read(pty.STDIN_FILENO, 1024)
+                except OSError as e:
+                    # the subprocess may have closed before we get to reading it
+                    if e.errno != errno.EIO:
+                        raise
+                if data:
+                    if write_transform:
+                        data = write_transform(data)
+                    self.send(data)
+
     def close(self):
+        self.eof_seen = True
+        self.eof_sent = True
         self.sock.close()
 
     def is_closed(self):
         if sys.version_info.major < 3:
-            return isinstance(self.sock._sock, socket._closedsocket)
+            return isinstance(self.sock._sock, socket._closedsocket)    # pylint: disable=no-member
         else:
             return self.sock._closed
 
