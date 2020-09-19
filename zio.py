@@ -43,19 +43,16 @@ from __future__ import print_function
 __version__ = "2.0.0"
 __project__ = "https://github.com/zTrix/zio"
 
-__all__ = [
-    'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 
-    'colored',
-]
-
 import os
 import sys
 import struct
 import functools
+import socket
+import signal
 try:
     from io import BytesIO
 except ImportError:
-    from StringIO import StringIO as ByteIO
+    from StringIO import StringIO as BytesIO
 
 try:
     from termcolor import colored
@@ -118,5 +115,164 @@ l32 = functools.partial(convert_packing, '<', 32)
 b32 = functools.partial(convert_packing, '>', 32)
 l64 = functools.partial(convert_packing, '<', 64)
 b64 = functools.partial(convert_packing, '>', 64)
+
+# -------------------------------------------------
+# =====> utility functions <=====
+
+# TODO: hex/unhex/xor some encoding functions
+
+def is_hostport_tuple(target):
+    return type(target) == tuple and len(target) == 2 and isinstance(target[1], int) and target[1] >= 0 and target[1] < 65536
+
+
+# -------------------------------------------------
+# =====> zio class <=====
+
+PIPE = 'pipe'           # io mode (process io): send all characters untouched, but use PIPE, so libc cache may apply
+TTY = 'tty'             # io mode (process io): normal tty behavier, support Ctrl-C to terminate, and auto \r\n to display more readable lines for human
+TTY_RAW = 'ttyraw'      # io mode (process io): send all characters just untouched
+
+def COLORED(f, color='cyan', on_color=None, attrs=None):
+    return lambda s : colored(f(s), color, on_color, attrs)
+
+class zio(object):
+    
+    def __init__(self, target,
+        stdin=PIPE,
+        stdout=TTY_RAW,
+        print_read=True,
+        print_write=True,
+        timeout=8,
+        cwd=None,
+        env=None,
+        sighup=signal.SIG_DFL,
+        write_delay=0.05,
+        debug=None,
+    ):
+        """
+        zio is an easy-to-use io library for pwning development, supporting an unified interface for local process pwning and remote tcp socket io
+
+        example:
+
+        io = zio(('localhost', 80))
+        io = zio(socket.create_connection(('127.0.0.1', 80)))
+        io = zio('ls -l')
+        io = zio(['ls', '-l'])
+
+        params:
+            print_read = bool, if true, print all the data read from target
+            print_write = bool, if true, print all the data sent out
+        """
+
+        if not target:
+            raise Exception('cmdline or socket not provided for zio, try zio("ls -l")')
+
+        self.target = target
+        self.print_read = print_read
+        self.print_write = print_write
+
+        # zio object itself is a buffered reader/writer
+        self.buffer = bytearray()
+
+        self.debug = debug
+
+        if isinstance(timeout, int) and timeout > 0:
+            self.timeout = timeout
+        else:
+            self.timeout = 8
+
+        if is_hostport_tuple(self.target) or isinstance(self.target, socket.socket):
+            self.io = SocketIO(self.target)
+        else:
+            # do process io
+            raise NotImplementedError
+
+    def read(self, size=None):
+        '''
+        if size is -1 or None, then read all bytes available until EOF
+        if size is a positive integer, read exactly `size` bytes and return
+        raise Exception if EOF occurred before full size read
+        '''
+        is_read_all = size is None or size < 0
+        while True:
+            if is_read_all or len(self.buffer) < size:
+                incoming = self.io.recv(1536)
+                if incoming is None:
+                    if is_read_all:
+                        ret = bytes(self.buffer)
+                        self.buffer.clear()
+                        return ret
+                    else:
+                        raise Exception('EOF occured before full size read, buffer = %s' % self.buffer)
+                self.buffer.extend(incoming)
+
+            if not is_read_all and len(self.buffer) >= size:
+                ret = bytes(self.buffer[:size])
+                self.buffer = self.buffer[size:]
+                return ret
+
+    read_exact = read
+    def read_to_end(self):
+        return self.read(size=-1)
+
+    def read_line(self):
+        pass
+
+    readline = read_line
+
+    def read_until(self, keep=True):
+        '''
+        '''
+        pass
+
+    readuntil = read_until
+
+    def read_some(self, size=None):
+        '''
+        just read 1 or more available bytes (less than size) and return
+        '''
+        pass
+
+    def close(self):
+        self.io.close()
+
+class SocketIO:
+    def __init__(self, target, timeout=None):
+        self.timeout = timeout
+        if isinstance(target, socket.socket):
+            self.sock = target
+        else:
+            self.sock = socket.create_connection(target, self.timeout)
+
+    @property
+    def rfd(self):
+        return self.sock.fileno()
+
+    @property
+    def wfd(self):
+        return self.sock.fileno()
+
+    def recv(self, size=None):
+        '''
+        recv 1 or more available bytes then return
+        '''
+        return self.sock.recv(size)
+
+    def send(self, buf):
+        return self.sock.sendall(buf)
+
+    def close(self):
+        self.sock.close()
+
+    def __repr__(self):
+        return repr(self.sock)
+
+# export useful things
+
+__all__ = [
+    'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 
+    'colored',
+    'zio',
+]
 
 # vi:set et ts=4 sw=4 ft=python :
