@@ -10,11 +10,19 @@ import time
 from io import BytesIO
 from zio import *
 
+port_used = set()
+
 class EchoServer(threading.Thread):
     def __init__(self, addr=None, port=None, content=b'', sleep_before=None, sleep_after=None, sleep_between=None):
         threading.Thread.__init__(self, name='ServerSock')
         self.addr = addr or '127.0.0.1'
-        self.port = port or random.choice(range(50000, 60000))
+        global port_used
+        while True:
+            if port is None or port in port_used:
+                port = random.choice(range(50000, 60000))
+            else:
+                break
+        self.port = port
         self.content = content
         self.sleep_before = sleep_before
         self.sleep_after = sleep_after
