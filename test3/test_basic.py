@@ -6,11 +6,15 @@ import unittest
 from io import StringIO
 from zio import *
 
-class ServerSock(threading.Thread):
-    def __init__(self, addr=None, port=None):
+class EchoServer(threading.Thread):
+    def __init__(self, addr=None, port=None, content=b'', sleep_before=None, sleep_after=None, sleep_between=None):
         threading.Thread.__init__(self, name='ServerSock')
         self.addr = addr or '127.0.0.1'
         self.port = port or random.choice(range(9527, 10000))
+        self.content = content
+        self.sleep_before = sleep_before
+        self.sleep_after = sleep_after
+        self.sleep_between = sleep_between
         self.setDaemon(True)
 
     def run(self):
@@ -19,9 +23,23 @@ class ServerSock(threading.Thread):
         server_sock.listen(1)
 
         peer_sock, peer_addr = server_sock.accept()
-        peer_sock.sendall(b'hello world\n')
-        peer_sock.sendall(b'\x81\x33\x80\xff\xff\x7f\x00\x00\x00\n')
+
+        contents = self.content if isinstance(self.content, (list, tuple)) else [self.content]
+
+        if self.sleep_before:
+            time.sleep(self.sleep_before)
+
+        for item in contents:
+            peer_sock.sendall(item)
+            
+            if self.sleep_between:
+                time.sleep(self.sleep_between)
+        
+        if self.sleep_after:
+            time.sleep(self.sleep_after)
+
         peer_sock.close()
+        server_sock.close()
 
     def target_addr(self):
         return (self.addr, self.port)
@@ -61,7 +79,7 @@ class ZIOTestCase(unittest.TestCase):
         self.assertIn(REPR(b'asdf'), "b'asdf'\r\n", 'b"asdf"\r\n')
 
     def test_socket_io(self):
-        server = ServerSock()
+        server = EchoServer(content=[b'hello world\n', b'\xe4\xbd\xa0\xe5\xa5\xbd\xe4\xb8\x96\xe7\x95\x8c\n'])
         server.start()
 
         logfile = StringIO()
@@ -80,7 +98,11 @@ class ZIOTestCase(unittest.TestCase):
 
         self.assertEqual(logfile.getvalue(), 'hello world')
 
+        content = io.read()
+        self.assertEqual(content, b'\n\xe4\xbd\xa0\xe5\xa5\xbd\xe4\xb8\x96\xe7\x95\x8c\n')
+
         io.close()
+        self.assertEqual(logfile.getvalue(), u'hello world\n你好世界\n')
 
 if __name__ == '__main__':
     unittest.main(verbosity=2, failfast=True)

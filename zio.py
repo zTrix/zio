@@ -341,7 +341,8 @@ class zio(object):
                 if incoming is None:
                     if is_read_all:
                         ret = bytes(self.buffer)
-                        self.buffer.clear()
+                        # self.buffer.clear()   # note: python2 does not support bytearray.clear()
+                        self.buffer = bytearray()
                         self.log_read(ret)
                         return ret
                     else:
@@ -398,8 +399,12 @@ class SocketIO:
     def recv(self, size=None):
         '''
         recv 1 or more available bytes then return
+        return None to indicate EOF
         '''
-        return self.sock.recv(size)
+        b = self.sock.recv(size)
+        if not b:
+            return None
+        return b
 
     def send(self, buf):
         return self.sock.sendall(buf)
