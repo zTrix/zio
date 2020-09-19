@@ -54,6 +54,9 @@ import signal
 import ast
 import binascii
 
+# we want to keep zio as a zero-dependency single-file easy-to-use library, and even more, work across python2/python3 boundary
+# https://python-future.org/compatible_idioms.html#unicode-text-string-literals
+
 # python2 python3 shim
 if sys.version_info.major < 3:
     input = raw_input           # pylint: disable=undefined-variable
@@ -431,6 +434,37 @@ class zio(object):
 
     recv = read_some
 
+    def write(self, byte_buf):
+        '''
+        write/sendall bytes and flush them all
+        '''
+        if not byte_buf:
+            return 0
+        self.log_write(byte_buf)
+        self.io.send(byte_buf)
+        return len(byte_buf)
+
+    def write_line(self, byte_buf):
+        '''
+        write byte_buf and a linesep
+        '''
+        return self.write(byte_buf + os.linesep.encode())
+
+    def write_lines(self, sequence):
+        n = 0
+        for s in sequence:
+            n += self.write_line(s)
+        return n
+
+    def send_eof(self):
+        '''
+        notify peer that we have done writing
+        '''
+        self.io.send_eof()
+
+    writeline = write_line
+    sendline = write_line
+
     def close(self):
         '''
         close underlying io and free all resources
@@ -494,11 +528,17 @@ class SocketIO:
     def send(self, buf):
         return self.sock.sendall(buf)
 
+    def send_eof(self):
+        self.sock.shutdown(socket.SHUT_WR)
+
     def close(self):
         self.sock.close()
 
     def is_closed(self):
-        return self.sock._closed
+        if sys.version_info.major < 3:
+            return isinstance(self.sock._sock, socket._closedsocket)
+        else:
+            return self.sock._closed
 
     def __repr__(self):
         return repr(self.sock)

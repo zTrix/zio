@@ -16,7 +16,7 @@ class EchoServer(threading.Thread):
     def __init__(self, addr=None, port=None, content=b'', sleep_before=None, sleep_after=None, sleep_between=None):
         threading.Thread.__init__(self, name='ServerSock')
         self.addr = addr or '127.0.0.1'
-        self.port = port or random.choice(range(9527, 10000))
+        self.port = port or random.choice(range(50000, 60000))
         self.content = content
         self.sleep_before = sleep_before
         self.sleep_after = sleep_after
@@ -136,6 +136,19 @@ class ZIOTestCase(unittest.TestCase):
 
         self.assertEqual(match_pattern(b'wont be found', b'asfasdasd'), (-1, -1))
         self.assertEqual(match_pattern(re.compile(b'study'), b'good good good good'), (-1, -1))
+
+    def test_socket_write(self):
+        server = EchoServer(content=[b'Welcome to Math World\n', b'input:', b'received\n'], sleep_between=0.5)
+        server.start()
+        time.sleep(0.1)
+        logfile = StringIO()
+
+        io = zio(server.target_addr(), logfile=logfile, print_read=False, print_write=True)
+        self.assertEqual(io.write(b'asdf'), 4)
+        self.assertEqual(logfile.getvalue(), u'asdf')
+
+        io.close()
+        self.assertEqual(io.is_closed(), True)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2, failfast=True)
