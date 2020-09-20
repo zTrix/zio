@@ -8,6 +8,7 @@ import time
 import threading
 import socket
 import unittest
+import string
 from StringIO import StringIO as BytesIO
 import unittest
 from zio import *
@@ -208,6 +209,28 @@ class ZIOTestCase(unittest.TestCase):
         self.assertEqual(r.strip(), os.uname()[0].encode())
 
         self.assertEqual(io.exit_status(), 0)
+
+    def test_tty_raw_out(self):
+        s = []
+        ans = []
+        for i in range(10):
+            r = random.randint(0,1)
+            s.append('%d%s' % (i, r and '\\r\\n' or '\\n'))
+            ans.append('%d%s' % (i, r and '\r\n' or '\n'))
+        ans = ''.join(ans)
+        cmd = "printf '" + ''.join(s) + "'"
+        io = zio(cmd, stdout=TTY_RAW)
+        rd = io.read()
+        io.close()
+        self.assertEqual(rd, ans.encode())
+
+        unprintable = [chr(c) for c in range(256) if chr(c) not in string.printable]
+        random.shuffle(unprintable)
+        unprintable = ''.join(unprintable)
+
+        io = zio(' '.join([sys.executable, '-u', os.path.join(os.path.dirname(sys.argv[0]), 'myprintf.py'), "'\\r\\n" + repr(unprintable)[1:-1] + "\\n'"]), stdout=TTY_RAW, print_read=COLORED(REPR))
+        rd = io.read()
+        self.assertEqual(rd, b"\r\n" + unprintable + b"\n")
 
 if sys.version_info[1] < 7:
     # python2.6 shim

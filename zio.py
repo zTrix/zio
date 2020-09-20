@@ -1595,6 +1595,7 @@ __all__ = [
     'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'convert_packing',
     'colored',
     'match_pattern',
+    'write_stdout', 'write_stderr',
     'xor', 'bytes2hex', 'hex2bytes', 'tohex', 'unhex',
     'zio',
     'HEX', 'TOHEX', 'UNHEX', 'EVAL', 'REPR', 'RAW', 'NONE',
