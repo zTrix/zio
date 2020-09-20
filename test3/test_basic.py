@@ -144,6 +144,25 @@ class ZIOTestCase(unittest.TestCase):
         io.close()
         self.assertEqual(io.is_closed(), True)
 
+    def test_attach_socket(self):
+        server = EchoServer(content=[b'Welcome to Math World\n', b'input:', b'received\n'], sleep_between=0.5)
+        server.start()
+        time.sleep(0.1)
+        logfile = BytesIO()
+
+        s = socket.create_connection(server.target_addr())
+        s.recv(22)
+
+        io = zio(s, logfile=logfile, print_read=True, print_write=False)
+        content = io.read_until(b'input:')
+        self.assertEqual(content, b'input:')
+
+        content = io.read_line()
+        self.assertEqual(content, b'received\n')
+
+        self.assertEqual(logfile.getvalue(), b'input:received\n')
+        io.close()
+
     # ------------------- ProcessIO Tests ---------------------
 
     def test_send_eof(self):
@@ -180,7 +199,7 @@ class ZIOTestCase(unittest.TestCase):
 
         io = zio('tty', stdin=TTY)
         out = io.read()
-        self.assertTrue(out.strip().startswith('/dev/'), repr(out))
+        self.assertTrue(out.strip().startswith(b'/dev/'), repr(out))
         io.close()
 
 if __name__ == '__main__':
