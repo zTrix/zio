@@ -242,5 +242,20 @@ class ZIOTestCase(unittest.TestCase):
             rs = io.readline()
             self.assertEqual(rs.strip(), s.strip(), 'TestCase Failure: got ' + repr(rs))
 
+    def test_cat_eof(self):
+        for io in exec_cmdline('cat'):
+            s = b'The Cat is #1'
+            io.write(s)
+            io.send_eof()
+            rs = io.read()
+            self.assertEqual(rs.strip(), s.strip(), repr(rs))
+
+    def test_cat_readline(self):
+        for io in exec_cmdline('cat'):
+            s = b'The Cat is #1'
+            io.write(s + b'\n' + b'blah blah')
+            rs = io.readline(keep=False)
+            self.assertEqual(rs, s)
+
 if __name__ == '__main__':
     unittest.main(verbosity=2, failfast=True)
