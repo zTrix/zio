@@ -505,7 +505,12 @@ class zio(object):
     read_exact = read
 
     def read_to_end(self):
+        '''
+        read all data until EOF
+        '''
         return self.read(size=-1)
+
+    read_all = read_to_end
 
     def read_line(self, keep=True):
         content = self.read_until(b'\n', keep=True)
@@ -607,6 +612,7 @@ class zio(object):
         return len(byte_buf)
 
     send = write    # for pwntools compatibility
+    sendall = write # for socket compatibility
 
     def write_line(self, byte_buf):
         '''

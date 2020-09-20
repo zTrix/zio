@@ -101,6 +101,8 @@ class ZIOTestCase(unittest.TestCase):
 
         io = zio(server.target_addr(), logfile=logfile, print_read=True, print_write=False)
 
+        self.assertEqual(io.mode(), 'socket')
+
         content = io.read(5)
         self.assertEqual(content, b'hello')
         self.assertEqual(logfile.getvalue(), b'hello')
