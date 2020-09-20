@@ -11,7 +11,7 @@ import string
 from io import BytesIO
 from zio import *
 
-from common import EchoServer
+from common import EchoServer, exec_cmdline, exec_script
 
 class ZIOTestCase(unittest.TestCase):
 
@@ -232,6 +232,15 @@ class ZIOTestCase(unittest.TestCase):
         io = zio(' '.join([sys.executable, '-u', os.path.join(os.path.dirname(sys.argv[0]), 'myprintf.py'), "'\\r\\n" + str(unprintable)[2:-1] + "\\n'"]), stdout=TTY_RAW, print_read=COLORED(REPR))
         rd = io.read()
         self.assertEqual(rd, b"\r\n" + unprintable + b"\n")
+
+    # ------------------- Tests for both SocketIO and ProcessIO ---------------------
+
+    def test_cat(self):
+        for io in exec_cmdline('cat'):
+            s = b'The Cat is #1\n'
+            io.write(s)
+            rs = io.readline()
+            self.assertEqual(rs.strip(), s.strip(), 'TestCase Failure: got ' + repr(rs))
 
 if __name__ == '__main__':
     unittest.main(verbosity=2, failfast=True)
