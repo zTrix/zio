@@ -626,6 +626,8 @@ class zio(object):
         '''
         if not byte_buf:
             return 0
+        if isinstance(byte_buf, unicode):
+            byte_buf = byte_buf.encode('latin-1')   # will raise UnicodeEncodeError if code point larger than 255
         self.log_write(bytes(byte_buf))
         self.io.send(byte_buf)
         return len(byte_buf)
@@ -637,6 +639,8 @@ class zio(object):
         '''
         write byte_buf and a linesep
         '''
+        if isinstance(byte_buf, unicode):
+            byte_buf = byte_buf.encode('latin-1')   # will raise UnicodeEncodeError if code point larger than 255
         return self.write(byte_buf + os.linesep.encode())
 
     sendline = write_line
