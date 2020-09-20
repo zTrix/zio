@@ -723,7 +723,7 @@ class SocketIO:
 
         self.eof_seen = False
         self.eof_sent = False
-        self.exit_status = None
+        self.exit_code = None
 
     @property
     def rfd(self):
@@ -746,14 +746,14 @@ class SocketIO:
                 return None
             return b
         except:
-            self.exit_status = 1    # recv exception
+            self.exit_code = 1    # recv exception
             raise
 
     def send(self, buf):
         try:
             return self.sock.sendall(buf)
         except:
-            self.exit_status = 2    # send exception
+            self.exit_code = 2    # send exception
             raise
 
     def send_eof(self):
@@ -793,9 +793,10 @@ class SocketIO:
         self.eof_sent = True
         try:
             self.sock.close()
-            self.exit_status = 0
+            if self.exit_code is None:
+                self.exit_code = 0
         except:
-            self.exit_status = 3    # close exception
+            self.exit_code = 3    # close exception
             raise
 
     def is_closed(self):
@@ -803,6 +804,10 @@ class SocketIO:
             return isinstance(self.sock._sock, socket._closedsocket)    # pylint: disable=no-member
         else:
             return self.sock._closed
+
+    @property
+    def exit_status(self):
+        return self.exit_code
 
     def __str__(self):
         return '<SocketIO ' \

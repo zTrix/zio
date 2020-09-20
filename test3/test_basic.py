@@ -257,5 +257,32 @@ class ZIOTestCase(unittest.TestCase):
             rs = io.readline(keep=False)
             self.assertEqual(rs, s)
 
+    def test_read_until(self):
+        for io in exec_cmdline('cat'):
+            s = ''.join([random.choice(string.printable[:62]) for x in range(1000)])
+            s = s.encode()
+            io.writeline(s)
+            io.read(100)
+            io.read_until(s[500:600])
+            mid = io.read(100)
+            self.assertEqual(mid, s[600:700])
+
+    def test_get_pass(self):
+        # here we have to use TTY, or password won't get write thru
+        # if you use subprocess, you will encounter same effect 
+        for io in exec_script('userpass.py', stdin=TTY):
+            io.read_until(b'Welcome')
+            io.read_line()
+            io.read_until(b'Username: ')
+            io.write_line(b'user')
+            io.read_until(b'Password: ')   # note the 'stream = sys.stdout' line in userpass.py, which makes this prompt readable here, else Password will be echoed back from stdin(tty), not stdout, so you will never read this!!
+            io.write_line(b'pass')
+            io.read_line()
+            line = io.read_line()
+            self.assertEqual(line.strip(), b'Logged in', repr(line))
+            io.read()
+            io.close()
+            self.assertEqual(io.exit_status(), 0)
+
 if __name__ == '__main__':
     unittest.main(verbosity=2, failfast=True)

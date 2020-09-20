@@ -87,4 +87,4 @@ def exec_cmdline(cmd, **kwargs):
 
 def exec_script(script, *args, **kwargs):
     py = sys.executable
-    return cmdline(' '.join([py, '-u', os.path.join(os.path.dirname(sys.argv[0]), script)] + list(args)), **kwargs)
+    return exec_cmdline(' '.join([py, '-u', os.path.join(os.path.dirname(sys.argv[0]), script)] + list(args)), **kwargs)
