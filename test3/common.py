@@ -33,24 +33,27 @@ class EchoServer(threading.Thread):
         server_sock.bind((self.addr, self.port))
         server_sock.listen(1)
 
-        peer_sock, peer_addr = server_sock.accept()
+        peer_sock, _peer_addr = server_sock.accept()
 
         contents = self.content if isinstance(self.content, (list, tuple)) else [self.content]
 
         if self.sleep_before:
             time.sleep(self.sleep_before)
 
-        for item in contents:
-            peer_sock.sendall(item)
+        try:
+            for item in contents:
+                peer_sock.sendall(item)
+                
+                if self.sleep_between:
+                    time.sleep(self.sleep_between)
             
-            if self.sleep_between:
-                time.sleep(self.sleep_between)
-        
-        if self.sleep_after:
-            time.sleep(self.sleep_after)
-
-        peer_sock.close()
-        server_sock.close()
+            if self.sleep_after:
+                time.sleep(self.sleep_after)
+        except:
+            pass
+        finally:
+            peer_sock.close()
+            server_sock.close()
 
     def target_addr(self):
         return (self.addr, self.port)

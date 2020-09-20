@@ -847,7 +847,10 @@ class ProcessIO:
         self.args[0] = executable
 
         # STEP 2: create pipes
-        stdout_master_fd, stdout_slave_fd = self._pipe_cloexec() if stdout == PIPE else pty.openpty()
+        if stdout == PIPE:
+            stdout_slave_fd, stdout_master_fd = self._pipe_cloexec()    # note: slave, master
+        else:
+            stdout_master_fd, stdout_slave_fd = pty.openpty()           # note: master, slave
 
         if stdout_master_fd < 0 or stdout_slave_fd < 0:
             raise RuntimeError('Could not create pipe or openpty for stdout/stderr')
@@ -975,6 +978,8 @@ class ProcessIO:
         return None to indicate EOF
         since we use b'' to indicate empty string in case of timeout, so do not return b'' for EOF
         '''
+        if size is None:    # os.read does not allow None or -1 as argument
+            size = 8192
         try:
             b = os.read(self.rfd, size)
             # https://docs.python.org/3/library/os.html#os.read
@@ -984,7 +989,9 @@ class ProcessIO:
                 return None
             return b
         except OSError as err:
-            if err.errno == errno.EIO:      # Linux does this
+            if err.errno in (errno.EIO, errno.EBADF):      # Linux does this
+                # EIO:   OSError: [Errno 5] Input/Output Error
+                # EBADF: OSError: [Errno 9] Bad file descriptor
                 self.eof_seen = True
                 return None
             raise
@@ -1160,6 +1167,8 @@ class ProcessIO:
 
     @property
     def exit_status(self):
+        if self.exit_code is None:
+            self._isalive()     # will modify exit_code if not alive
         return self.exit_code
 
     def __str__(self):
@@ -1256,8 +1265,8 @@ class ProcessIO:
         if self.eof_seen:
             # This is for Linux, which requires the blocking form
             # of waitpid to # get status of a defunct process.
-            # This is super-lame. The flag_eof would have been set
-            # in read_nonblocking(), so this should be safe.
+            # This is super-lame. The eof_seen would have been set
+            # in recv(), so this should be safe.
             waitpid_options = 0
         else:
             waitpid_options = os.WNOHANG

@@ -202,5 +202,13 @@ class ZIOTestCase(unittest.TestCase):
         self.assertTrue(out.strip().startswith(b'/dev/'), repr(out))
         io.close()
 
+    def test_uname(self):
+        io = zio('uname', stdout=PIPE)
+        r = io.read()
+        io.close()
+        self.assertEqual(r.strip(), os.uname()[0].encode())
+
+        self.assertEqual(io.exit_status(), 0)
+
 if __name__ == '__main__':
     unittest.main(verbosity=2, failfast=True)

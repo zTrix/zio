@@ -201,6 +201,14 @@ class ZIOTestCase(unittest.TestCase):
         self.assertTrue(out.strip().startswith('/dev/'), repr(out))
         io.close()
 
+    def test_uname(self):
+        io = zio('uname', stdout=PIPE)
+        r = io.read()
+        io.close()
+        self.assertEqual(r.strip(), os.uname()[0].encode())
+
+        self.assertEqual(io.exit_status(), 0)
+
 if sys.version_info[1] < 7:
     # python2.6 shim
 
