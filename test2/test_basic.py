@@ -73,8 +73,8 @@ class ZIOTestCase(unittest.TestCase):
         self.assertEqual(l32('\x00\x00\x00\x00\x01\x00\x00\x00\x02', autopad=True), [0, 1, 2])
         self.assertEqual(b32('\x00\x00\x00\x00\x01\x00\x00\x00\x02', autopad=True), [0, 0x1000000, 2])
 
-        with self.assertRaises(ValueError):
-            b32('\x00\x00\x00\x00\x01\x00\x00\x00\x02')
+        # python 2.6 2.7 compatible way
+        self.assertRaises(ValueError, b32, '\x00\x00\x00\x00\x01\x00\x00\x00\x02')
 
     def test_encoding(self):
         a = b"\xd8;:Dx-;Fx)=Yx%'L(*6\x01797Sx;:Dx#3[!o6N?\xb0"
@@ -87,8 +87,8 @@ class ZIOTestCase(unittest.TestCase):
 
         self.assertEqual(unhex('11223', autopad='right'), b'\x11\x22\x30')
         self.assertEqual(unhex('11223', autopad='left'), b'\x01\x12\x23')
-        with self.assertRaises(ValueError):
-            unhex('11223', autopad=False)
+
+        self.assertRaises(ValueError, unhex, '11223', autopad=False)
 
         self.assertIn(REPR(b'asdf'), "b'asdf'\r\n", 'b"asdf"\r\n')
 
@@ -134,8 +134,7 @@ class ZIOTestCase(unittest.TestCase):
         self.assertEqual(line, b'received')
         self.assertEqual(logfile.getvalue(), 'Welcome to Math World\ninput:received\n')
 
-        with self.assertRaises(EOFError):
-            io.read_until(b'____')
+        self.assertRaises(EOFError, io.read_until, b'____')
 
         io.read()
         io.close()
@@ -182,5 +181,24 @@ class ZIOTestCase(unittest.TestCase):
         io.close()
         self.assertEqual(io.is_closed(), True)
 
+if sys.version_info[1] < 7:
+    # python2.6 shim
+
+    def assertIn(self, member, container, msg=None):
+        """Just like self.assertTrue(a in b), but with a nicer default message."""
+        if member not in container:
+            standardMsg = '%s not found in %s' % (repr(member), repr(container))
+            raise self.failureException, (msg or standardMsg)   # pylint: disable=syntax-error
+    ZIOTestCase.assertIn = assertIn
+
+    def assertNotIn(self, member, container, msg=None):
+        """Just like self.assertTrue(a not in b), but with a nicer default message."""
+        if member in container:
+            standardMsg = '%s unexpectedly found in %s' % (repr(member), repr(container))
+            raise self.failureException, (msg or standardMsg)   # pylint: disable=syntax-error
+
 if __name__ == '__main__':
-    unittest.main(verbosity=2, failfast=True)
+    if sys.version_info[1] < 7:
+        unittest.main()
+    else:
+        unittest.main(verbosity=2, failfast=True)

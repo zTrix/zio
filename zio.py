@@ -71,8 +71,10 @@ from distutils.spawn import find_executable
 # we want to keep zio as a zero-dependency single-file easy-to-use library, and even more, work across python2/python3 boundary
 # https://python-future.org/compatible_idioms.html#unicode-text-string-literals
 
+python_version_major = sys.version_info[0]      # do not use sys.version_info.major which is not available in python2.6
+
 # python2 python3 shim
-if sys.version_info.major < 3:
+if python_version_major < 3:
     input = raw_input           # pylint: disable=undefined-variable
 else:
     unicode = str
@@ -174,7 +176,7 @@ def hex2bytes(s, autopad=False):
 tohex = bytes2hex
 unhex = hex2bytes
 
-if sys.version_info.major < 3:
+if python_version_major < 3:
     def xor(a, b):
         '''
         bytes -> bytes -> bytes
@@ -216,7 +218,7 @@ def write_stdout(data):
     if hasattr(sys.stdout, 'buffer'):
         sys.stdout.buffer.write(data)
     else:
-        if sys.version_info.major < 3:
+        if python_version_major < 3:
             sys.stdout.write(data)
         else:
             sys.stdout.write(data.decode())
@@ -226,7 +228,7 @@ def write_stderr(data):
     if hasattr(sys.stderr, 'buffer'):
         sys.stderr.buffer.write(data)
     else:
-        if sys.version_info.major < 3:
+        if python_version_major < 3:
             sys.stderr.write(data)
         else:
             sys.stderr.write(data.decode())
@@ -244,7 +246,7 @@ def COLORED(f, color='cyan', on_color=None, attrs=None):
 
 # read/write transform functions
 # bytes -> (printable) bytes
-if sys.version_info.major < 3:
+if python_version_major < 3:
     def REPR(s): return b'b' + repr(s) + b'\r\n'
 else:
     def REPR(s): return str(s).encode() + b'\r\n'
@@ -278,7 +280,7 @@ def EVAL(s):    # now you are not worried about pwning yourself, do not use ast.
         else:
             num = int(s[i:i+2], 16)
             assert 0 <= num < 256
-            if sys.version_info.major < 3:
+            if python_version_major < 3:
                 ret.append(chr(num))
             else:
                 ret.append(bytes([num]))
@@ -291,7 +293,7 @@ def HEX(s): return bytes2hex(s) + b'\r\n'
 TOHEX = HEX
 def UNHEX(s): return hex2bytes(s)
 
-if sys.version_info.major < 3:
+if python_version_major < 3:
     def BIN(s): return b' '.join([format(ord(x),'08b') for x in str(s)]) + b'\r\n'
 else:
     def BIN(s): return b' '.join([format(x,'08b').encode() for x in s]) + b'\r\n'
@@ -306,7 +308,7 @@ def UNBIN(s, autopad=False):
             s = s + (b'0' * extra)
         else:
             raise ValueError('invalid length of 01 bytestring: %d, should be multiple of 8. Use autopad=True to fix automatically' % len(s))
-    if sys.version_info.major < 3:
+    if python_version_major < 3:
         return b''.join([chr(int(s[x:x+8],2)) for x in range(0, len(s), 8)])
     else:
         return bytes([int(s[x:x+8],2) for x in range(0, len(s), 8)])
@@ -769,7 +771,7 @@ class SocketIO:
         self.sock.close()
 
     def is_closed(self):
-        if sys.version_info.major < 3:
+        if python_version_major < 3:
             return isinstance(self.sock._sock, socket._closedsocket)    # pylint: disable=no-member
         else:
             return self.sock._closed
