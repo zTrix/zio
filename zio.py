@@ -543,7 +543,7 @@ class zio(object):
                 span = match_pattern(p, self.buffer)
                 if span[0] > -1: # found
                     ret = self.buffer[:span[1]] if keep == True else self.buffer[:span[0]]
-                    self.log_read(self.buffer[:span[1]])
+                    self.log_read(bytes(self.buffer[:span[1]]))
                     self.buffer = self.buffer[span[1]:]
                     return ret
 
@@ -607,7 +607,7 @@ class zio(object):
         '''
         if not byte_buf:
             return 0
-        self.log_write(byte_buf)
+        self.log_write(bytes(byte_buf))
         self.io.send(byte_buf)
         return len(byte_buf)
 
@@ -960,12 +960,12 @@ class ProcessIO:
             b = os.read(self.rfd, size)
             # https://docs.python.org/3/library/os.html#os.read
             # If the end of the file referred to by fd has been reached, an empty bytes object is returned.
-            if not b:
+            if not b:                       # BSD style
                 self.eof_seen = True
                 return None
             return b
         except OSError as err:
-            if err.errno == errno.EIO:
+            if err.errno == errno.EIO:      # Linux does this
                 self.eof_seen = True
                 return None
             raise

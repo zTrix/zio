@@ -201,5 +201,18 @@ class ZIOTestCase(unittest.TestCase):
 
         io.close()
 
+    def test_hex_read(self):
+        logfile = BytesIO()
+
+        io = zio('cat', logfile=logfile, print_read=HEX, print_write=False)
+
+        io.writeline(b'____')
+        content = io.readline(keep=False)
+
+        self.assertEqual(content, b'____')
+        self.assertEqual(logfile.getvalue(), b'5f5f5f5f0a\r\n')
+
+        io.close()
+
 if __name__ == '__main__':
     unittest.main(verbosity=2, failfast=True)
