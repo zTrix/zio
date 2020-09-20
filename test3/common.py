@@ -1,7 +1,13 @@
+from __future__ import print_function
+
+import os
+import sys
 import random
 import threading
 import socket
 import time
+import subprocess
+from zio import *
 
 port_used = set()
 
@@ -48,3 +54,34 @@ class EchoServer(threading.Thread):
 
     def target_addr(self):
         return (self.addr, self.port)
+
+def exec_cmdline(cmd, **kwargs):
+    print('')
+    socat_exec = ',pty,stderr,ctty'
+    if 'socat_exec' in kwargs:
+        socat_exec = kwargs['socat_exec']
+        del kwargs['socat_exec']
+    io = zio(cmd, **kwargs)
+    yield io
+    io.close()
+    print('%r exited: %s' % (cmd, io.exit_status()))
+
+    for _ in range(16):
+        port = random.randint(31337, 65530)
+        p = subprocess.Popen(['socat', 'TCP-LISTEN:%d' % port, 'exec:"' + cmd + '"' + socat_exec])
+        time.sleep(0.2)
+        if p.returncode:
+            continue
+        try:
+            io = zio(('127.0.0.1', port), **kwargs)
+            yield io
+        except socket.error:
+            continue
+        io.close()
+        p.terminate()
+        p.wait()
+        break
+
+def exec_script(script, *args, **kwargs):
+    py = sys.executable
+    return cmdline(' '.join([py, '-u', os.path.join(os.path.dirname(sys.argv[0]), script)] + list(args)), **kwargs)

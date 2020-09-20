@@ -172,5 +172,16 @@ class ZIOTestCase(unittest.TestCase):
 
         io.close()
 
+    def test_tty(self):
+        io = zio('tty')
+        out = io.read()
+        self.assertEqual(out.strip(), b'not a tty', repr(out))
+        io.close()
+
+        io = zio('tty', stdin=TTY)
+        out = io.read()
+        self.assertTrue(out.strip().startswith('/dev/'), repr(out))
+        io.close()
+
 if __name__ == '__main__':
     unittest.main(verbosity=2, failfast=True)

@@ -703,6 +703,11 @@ class zio(object):
     def mode(self):
         return self.io.mode
 
+    def exit_status(self):
+        return self.io.exit_status
+
+    exit_code = exit_status
+
     def __str__(self):
         return '<zio target=%s, timeout=%s, io=%s, buffer=%s>' % (self.target, self.timeout, str(self.io), self.buffer)
 
@@ -718,6 +723,7 @@ class SocketIO:
 
         self.eof_seen = False
         self.eof_sent = False
+        self.exit_status = None
 
     @property
     def rfd(self):
@@ -733,14 +739,22 @@ class SocketIO:
         return None to indicate EOF
         since we use b'' to indicate empty string in case of timeout, so do not return b'' for EOF
         '''
-        b = self.sock.recv(size)
-        if not b:
-            self.eof_seen = True
-            return None
-        return b
+        try:
+            b = self.sock.recv(size)
+            if not b:
+                self.eof_seen = True
+                return None
+            return b
+        except:
+            self.exit_status = 1    # recv exception
+            raise
 
     def send(self, buf):
-        return self.sock.sendall(buf)
+        try:
+            return self.sock.sendall(buf)
+        except:
+            self.exit_status = 2    # send exception
+            raise
 
     def send_eof(self):
         self.eof_sent = True
@@ -777,7 +791,12 @@ class SocketIO:
     def close(self):
         self.eof_seen = True
         self.eof_sent = True
-        self.sock.close()
+        try:
+            self.sock.close()
+            self.exit_status = 0
+        except:
+            self.exit_status = 3    # close exception
+            raise
 
     def is_closed(self):
         if python_version_major < 3:
@@ -1138,6 +1157,10 @@ class ProcessIO:
 
     def is_closed(self):
         return self.rfd == -1 and self.wfd == -1 and self.eof_sent == True and self.eof_seen == True
+
+    @property
+    def exit_status(self):
+        return self.exit_code
 
     def __str__(self):
         return '<ProcessIO cmdline=%s>' % (self.args)
