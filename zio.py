@@ -332,9 +332,13 @@ def select_ignoring_useless_signal(iwtd, owtd, ewtd, timeout=None):
     while True:
         try:
             return select.select(iwtd, owtd, ewtd, timeout)
-        except select.error:
-            err = sys.exc_info()[1]
-            if err[0] == errno.EINTR:
+        except select.error as err:
+            if select.error == OSError:     # python3 style
+                eno = err.errno
+            else:
+                err = sys.exc_info()[1]     # python2 style
+                eno = err[0]
+            if eno == errno.EINTR:
                 # if we loop back we have to subtract the
                 # amount of time we already waited.
                 if timeout is not None:
@@ -656,11 +660,11 @@ class zio(object):
     sendeof = send_eof
     end = send_eof      # for zio 1.0 compatibility
 
-    def interact(self, read_transform=None, write_transform=None):
+    def interact(self, read_transform=None, write_transform=None, show_input=None, show_output=None):
         '''
         interact with current tty stdin/stdout
         '''
-        self.io.interact(read_transform=read_transform, write_transform=write_transform)
+        self.io.interact(read_transform=read_transform, write_transform=write_transform, show_input=show_input, show_output=show_output)
 
     interactive = interact      # for pwntools compatibility
 
@@ -760,7 +764,11 @@ class SocketIO:
         self.eof_sent = True
         self.sock.shutdown(socket.SHUT_WR)
 
-    def interact(self, read_transform=None, write_transform=None):
+    def interact(self, read_transform=None, write_transform=None, show_input=None, show_output=None):
+        if show_input is None:
+            show_input = not os.isatty(pty.STDIN_FILENO)    # if pty, itself will echo; if pipe, we do echo
+        if show_output is None:
+            show_output = True
         while not self.is_closed():
             try:
                 r, _w, _e = select_ignoring_useless_signal([self.rfd, pty.STDIN_FILENO], [], [])
@@ -772,7 +780,8 @@ class SocketIO:
                 if data:
                     if read_transform is not None:
                         data = read_transform(data)
-                    write_stdout(data)
+                    if show_output:
+                        write_stdout(data)
                 else:       # EOF
                     self.eof_seen = True
                     break
@@ -786,6 +795,8 @@ class SocketIO:
                 if data:
                     if write_transform:
                         data = write_transform(data)
+                    if show_input:
+                        write_stdout(data)
                     self.send(data)
 
     def close(self):
@@ -1028,11 +1039,16 @@ class ProcessIO:
                 time.sleep(self.close_delay)
                 os.close(self.wfd)  # might cause EIO (input/output error)! use force_close at your own risk
 
-    def interact(self, read_transform=None, write_transform=None):
+    def interact(self, read_transform=None, write_transform=None, show_input=None, show_output=None):
         """
         when stdin is passed using os.pipe, backspace key will not work as expected,
         if wfd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so you should choose the right input when using zio
         """
+        if show_input is None:
+            show_input = True
+        if show_output is None:
+            show_output = True
+
         # if input_filter is not none, we should let user do some line editing
         if os.isatty(pty.STDIN_FILENO):
             mode = tty.tcgetattr(pty.STDIN_FILENO)  # mode will be restored after interact
@@ -1078,7 +1094,8 @@ class ProcessIO:
                         if e.errno != errno.EIO:
                             raise
                     if data:
-                        write_stdout(data)
+                        if show_input:
+                            write_stdout(data)
                     else:
                         rfdlist.remove(self.wfd)
                 if self.rfd in r:
@@ -1091,8 +1108,9 @@ class ProcessIO:
                     if data:
                         if read_transform:
                             data = read_transform(data)
-                        # now we are in interact mode, so users want to see things in real
-                        write_stdout(data)
+                        if show_output:
+                            # now we are in interact mode, so users want to see things in real
+                            write_stdout(data)
                     else:
                         rfdlist.remove(self.rfd)
                         self.eof_seen = True
@@ -1111,10 +1129,12 @@ class ProcessIO:
                     if data:
                         if write_transform:
                             data = write_transform(data)
-                        if not os.isatty(self.wfd):     # we must do the translation when tty does not help
-                            data = data.replace(b'\r', b'\n')
-                            # also echo back by ourselves, now we are echoing things we input by hand, so there is no need to wrap with print_write by default, unless raw_rw set to False
-                            write_stdout(data)
+                        if not os.isatty(self.wfd):
+                            if os.isatty(pty.STDIN_FILENO):
+                                data = data.replace(b'\r\n', b'\n')     # we must do the translation when tty does not help
+                            # also echo back by ourselves, now we are echoing things we input by hand
+                            if show_input:
+                                write_stdout(data)
                         while data != b'' and self._isalive():
                             n = self.send(data, delay=False)
                             data = data[n:]
@@ -1135,7 +1155,8 @@ class ProcessIO:
                     if data:
                         if read_transform:
                             data = read_transform(data)
-                        write_stdout(data)
+                        if show_output:
+                            write_stdout(data)
                     else:
                         self.eof_seen = True
                         break
@@ -1493,7 +1514,7 @@ examples:
 def cmdline(argv):
     import getopt       # use getopt for better compatibility, argparse is not introduced until python2.7
     try:
-        opts, args = getopt.getopt(argv, 'hi:o:t:r:w:d:a:b:l:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'ahead=', 'before=', 'debug=', 'delay='])
+        opts, args = getopt.getopt(argv, 'hi:o:t:r:w:d:e:a:b:l:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'encode=', 'ahead=', 'before=', 'debug=', 'delay=', 'show-input=', 'show-output='])
     except getopt.GetoptError as err:
         print(str(err))
         usage()
@@ -1504,6 +1525,9 @@ def cmdline(argv):
         'stdout': TTY,
     }
     decode = None
+    encode = None
+    show_input = None
+    show_output = None
     ahead = None
     before = None
     for o, a in opts:
@@ -1553,6 +1577,17 @@ def cmdline(argv):
                 decode = EVAL
             elif a.lower() == 'unhex':
                 decode = UNHEX
+        elif o in ('-e', '--encode'):
+            if a.lower() == 'repr':
+                encode = REPR
+            elif a.lower() == 'hex':
+                encode = HEX
+            elif a.lower() == 'bin':
+                encode = BIN
+        elif o in ('--show-input', ):
+            show_input = a.lower() in ('true', '1', 't', 'yes', 'y')
+        elif o in ('--show-output', ):
+            show_output = a.lower() in ('true', '1', 't', 'yes', 'y')
         elif o in ('-a', '--ahead'):
             ahead = a
         elif o in ('-b', '--before'):
@@ -1578,10 +1613,10 @@ def cmdline(argv):
 
     io = zio(target, **kwargs)
     if before:
-        io.read_until(before)
+        io.read_until(before.encode())
     if ahead:
-        io.write(ahead)
-    io.interact(read_transform=decode)
+        io.write(ahead.encode())
+    io.interact(write_transform=decode, read_transform=encode, show_input=show_input, show_output=show_output)
 
 def main():
     if len(sys.argv) < 2:

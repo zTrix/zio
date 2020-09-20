@@ -75,7 +75,34 @@ To be added... Please wait...
 
 ### about line break and carriage return
 
-Just don't read '\n' or '\r', use `readline()` instead
+Just don't read '\n' or '\r', use `read_line()` instead
+
+### Play with cmdline
+
+Act like netcat
+
+```
+$ printf 'GET / HTTP/1.0\r\n\r\n' | ./zio.py baidu.com 80
+```
+
+Unhex
+
+```
+$ echo '3334350a' | ./zio.py -d unhex -w none -r none -i pipe -o pipe --show-input=0 cat
+345
+```
+
+hexcat some file
+
+```
+$ cat somefile | ./zio.py -e hex -w none -r none -i pipe -o pipe --show-input=0 cat
+```
+
+show file in string repr
+
+```
+$ cat somefile | ./zio.py -e repr -w none -r none -i pipe -o pipe --show-input=0 cat
+```
 
 ## Thanks (Also references)
 
