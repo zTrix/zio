@@ -387,8 +387,17 @@ class zio(object):
         io = zio(['ls', '-l'])
 
         params:
-            print_read = bool, if true, print all the data read from target
-            print_write = bool, if true, print all the data sent out
+            target(required): the target object for zio to operate with, could be socket (addr, port) tuple, or connected socket object, or cmd line for spawning process
+            print_read: bool | [COLORED]{NONE, RAW, REPR, HEX}, if set, transform and print all the data read from target
+            print_write: bool | [COLORED]{NONE, RAW, REPR, HEX}, if set, transform and print all the data sent out
+            timeout: int, the global timeout for this zio object
+            logfile: where to print traffic data in or out from target, default to sys.stderr
+            debug: if set to a file object(must be opened using binary mode), will provide info for debugging zio internal. leave it to None by default.
+            stdin(ProcessIO only): {PIPE, TTY, TTY_RAW} which mode to choose for child process stdin
+            stdout(ProcessIO only): {PIPE, TTY, TTY_RAW} which mode to choose for child process stdout
+            cwd(ProcessIO only): the working directory to spawn child process
+            env(ProcessIO only): env variables for child process
+            write_delay(ProcessIO only): write delay for child process to prevent writing too fast
         """
 
         if not target:
@@ -413,9 +422,9 @@ class zio(object):
             self.timeout = 16
 
         if is_hostport_tuple(self.target) or isinstance(self.target, socket.socket):
-            self.io = SocketIO(self.target, timeout=self.timeout)
+            self.io = SocketIO(self.target, timeout=self.timeout, debug=debug)
         else:
-            self.io = ProcessIO(self.target, timeout=self.timeout,
+            self.io = ProcessIO(self.target, timeout=self.timeout, debug=debug,
                 stdin=stdin,
                 stdout=stdout,
                 cwd=cwd,
@@ -721,8 +730,10 @@ class zio(object):
 class SocketIO:
     mode = 'socket'
 
-    def __init__(self, target, timeout=None):
+    def __init__(self, target, timeout=None, debug=None):
         self.timeout = timeout
+        self.debug = debug
+
         if isinstance(target, socket.socket):
             self.sock = target
         else:
@@ -752,15 +763,21 @@ class SocketIO:
                 self.eof_seen = True
                 return None
             return b
-        except:
+        except Exception as ex:
             self.exit_code = 1    # recv exception
+            if self.debug:
+                self.debug.write(b'SocketIO recv exception: %r\n' % ex)
+                self.debug.flush()
             raise
 
     def send(self, buf):
         try:
             return self.sock.sendall(buf)
-        except:
+        except Exception as ex:
             self.exit_code = 2    # send exception
+            if self.debug:
+                self.debug.write(b'SocketIO send exception: %r\n' % ex)
+                self.debug.flush()
             raise
 
     def send_eof(self):
@@ -809,8 +826,11 @@ class SocketIO:
             self.sock.close()
             if self.exit_code is None:
                 self.exit_code = 0
-        except:
+        except Exception as ex:
             self.exit_code = 3    # close exception
+            if self.debug:
+                self.debug.write(b'SocketIO send exception: %r\n' % ex)
+                self.debug.flush()
             raise
 
     def is_closed(self):
@@ -834,11 +854,12 @@ class SocketIO:
 class ProcessIO:
     mode = 'process'
 
-    def __init__(self, target, timeout=None, stdin=PIPE, stdout=TTY_RAW, cwd=None, env=None, sighup=None, write_delay=None):
+    def __init__(self, target, timeout=None, stdin=PIPE, stdout=TTY_RAW, cwd=None, env=None, sighup=None, write_delay=None, debug=None):
         if os.name == 'nt':
             raise RuntimeError("zio (version %s) process mode does not support windows operation system." % __version__)
 
         self.timeout = timeout
+        self.debug = debug
 
         self.write_delay = write_delay  # the delay before writing data, pexcept said Linux don't like this to be below 30ms
         self.close_delay = 0.1          # like pexcept, will used by close(), to give kernel time to update process status, time in seconds
@@ -911,7 +932,9 @@ class ProcessIO:
                     h, w = self._getwinsize(0)
                     self._setwinsize(stdout_slave_fd, h, w)     # note that this may not be successful
             except BaseException as ex:
-                print('[ WARN ] setwinsize exception: %s' % (str(ex)), file=sys.stderr)
+                if self.debug:
+                    self.debug.write(b'[ WARN ] setwinsize exception: %r\n' % ex)
+                    self.debug.flush()
 
             # Dup fds for child
             def _dup2(a, b):
@@ -978,7 +1001,9 @@ class ProcessIO:
                 if stdout == TTY_RAW:
                     self._ttyraw(self.rfd, raw_in = False, raw_out = True)
                     self._rfd_raw_mode = tty.tcgetattr(self.rfd)[:]
-                    # if self.debug: log('stdout tty raw mode: %r' % self._rfd_raw_mode, f = self.debug)
+                    if self.debug:
+                        self.debug.write(b'stdout tty raw mode: %r\n' % self._rfd_raw_mode)
+                        self.debug.flush()
                 else:
                     self._rfd_raw_mode = self._rfd_init_mode[:]
 
@@ -1061,14 +1086,17 @@ class ProcessIO:
             # but we should only enable for those who need cooked mode, not stuff like vim
             # we just do a simple detection here
             wfd_mode = tty.tcgetattr(self.wfd)
-            # if self.debug:
-            #     log('wfd now mode = ' + repr(wfd_mode), f = self.debug)
-            #     log('wfd raw mode = ' + repr(self._wfd_raw_mode), f = self.debug)
-            #     log('wfd ini mode = ' + repr(self._wfd_init_mode), f = self.debug)
+            if self.debug:
+                self.debug.write(b'wfd now mode = %r\n' % wfd_mode)
+                self.debug.write(b'wfd raw mode = %r\n' % self._wfd_raw_mode)
+                self.debug.write(b'wfd ini mode = %r\n' % self._wfd_init_mode)
+                self.debug.flush()
+
             if wfd_mode == self._wfd_raw_mode:     # if untouched by forked child
                 tty.tcsetattr(self.wfd, tty.TCSAFLUSH, self._wfd_init_mode)
-                # if self.debug:
-                #     log('change wfd back to init mode', f = self.debug)
+                if self.debug:
+                    self.debug(b'change wfd back to init mode\n')
+                    self.debug.flush()
             # but wait, things here are far more complex than that
             # most applications set mode not by setting it to some value, but by flipping some bits in the flags
             # so, if we set wfd raw mode at the beginning, we are unable to set the correct mode here
@@ -1088,7 +1116,9 @@ class ProcessIO:
                     r, _w, _e = select_ignoring_useless_signal(rfdlist, [], [])
                 except KeyboardInterrupt:
                     break
-                # if self.debug: log('r  = ' + repr(r), f = self.debug)
+                if self.debug:
+                    self.debug.write(b'r = %r\n' % r)
+                    self.debug.flush()
                 if self.wfd in r:          # handle tty echo back first if wfd is a tty
                     try:
                         data = None
@@ -1125,9 +1155,10 @@ class ProcessIO:
                         # the subprocess may have closed before we get to reading it
                         if e.errno != errno.EIO:
                             raise
-                    # if self.debug and os.isatty(self.wfd):
-                    #     wfd_mode = tty.tcgetattr(self.wfd)
-                    #     log('stdin wfd mode = ' + repr(wfd_mode), f = self.debug)
+                    if self.debug and os.isatty(self.wfd):
+                        wfd_mode = tty.tcgetattr(self.wfd)
+                        self.debug.write(b'stdin wfd mode = %r' % wfd_mode)
+                        self.debug.flush()
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
                     if data:
                         if write_transform:
@@ -1596,7 +1627,11 @@ def cmdline(argv):
         elif o in ('-b', '--before'):
             before = a
         elif o in ('--debug',):
-            kwargs['debug'] = open(a, 'w')
+            if os.path.exists(a):
+                choice = input('file exists at %s, overwrite(Y/n)?' % a)
+                if choice.strip().lower() == 'n':
+                    return
+            kwargs['debug'] = open(a, 'wb')
         elif o in ('-l', '--delay'):
             kwargs['write_delay'] = float(a)
 
