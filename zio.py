@@ -936,7 +936,7 @@ class ProcessIO:
 
             try:
                 if os.isatty(stdout_slave_fd) and os.isatty(pty.STDIN_FILENO):
-                    h, w = self._getwinsize(0)
+                    h, w = self._getwinsize(pty.STDIN_FILENO)
                     self._setwinsize(stdout_slave_fd, h, w)     # note that this may not be successful
             except BaseException as ex:
                 if self.debug:
@@ -1124,7 +1124,7 @@ class ProcessIO:
                 except KeyboardInterrupt:
                     break
                 if self.debug:
-                    self.debug.write(b'r = %r\n' % r)
+                    self.debug.write(b'[ProcessIO.interact] r = %r\n' % r)
                     self.debug.flush()
                 if self.wfd in r:          # handle tty echo back first if wfd is a tty
                     try:
@@ -1172,7 +1172,7 @@ class ProcessIO:
                             data = write_transform(data)
                         if not os.isatty(self.wfd):
                             if os.isatty(pty.STDIN_FILENO):
-                                data = data.replace(b'\r\n', b'\n')     # we must do the translation when tty does not help
+                                data = data.replace(b'\r', b'\n')     # we must do the translation when tty does not help
                             # also echo back by ourselves, now we are echoing things we input by hand
                             if show_input:
                                 write_stdout(data)
