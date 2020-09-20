@@ -509,7 +509,7 @@ class zio(object):
 
     def read_line(self, keep=True):
         content = self.read_until(b'\n', keep=True)
-        if keep==False:
+        if not keep:
             content = content.rstrip(b'\r\n')
         return content
 

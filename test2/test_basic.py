@@ -155,7 +155,9 @@ class ZIOTestCase(unittest.TestCase):
         content = io.read_until_timeout(1.5)
         self.assertEqual(content, b'input:')
 
-        content = io.read_until_timeout(2)
+        time.sleep(2)
+        self.assertEqual(io.readable(), True)
+        content = io.read_until_timeout(1)
         self.assertEqual(content, b'received\n')
 
         io.close()
