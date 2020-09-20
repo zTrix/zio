@@ -123,6 +123,9 @@ def convert_packing(endian, bits, arg, autopad=False):
     """
     pfs = {8: 'B', 16: 'H', 32: 'I', 64: 'Q'}
 
+    if isinstance(arg, unicode):
+        arg = arg.encode('latin-1')
+
     if isinstance(arg, bytearray):
         arg = bytes(arg)
 
