@@ -21,6 +21,8 @@ class zio:
             if pattern in data:
                 return data
 
+    readuntil = read_until
+
     def read(self, n=None):
         is_read_all = n == -1 or n is None
         data = b''
