@@ -261,7 +261,8 @@ class ZIOTestCase(unittest.TestCase):
             s = b''.join([random.choice(string.printable[:62]) for x in range(1000)])
             io.writeline(s)
             io.read(100)
-            io.read_until(s[500:600])
+            content = io.read_until(s[500:600])
+            self.assertEqual(type(content), bytes)
             mid = io.read(100)
             self.assertEqual(mid, s[600:700])
 

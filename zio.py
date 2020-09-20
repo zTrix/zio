@@ -123,6 +123,9 @@ def convert_packing(endian, bits, arg, autopad=False):
     """
     pfs = {8: 'B', 16: 'H', 32: 'I', 64: 'Q'}
 
+    if isinstance(arg, bytearray):
+        arg = bytes(arg)
+
     if isinstance(arg, bytes):      # bytes -> int or [int]
         c = bits // 8
         r = len(arg) % c
@@ -549,7 +552,7 @@ class zio(object):
                     ret = self.buffer[:span[1]] if keep == True else self.buffer[:span[0]]
                     self.log_read(bytes(self.buffer[:span[1]]))
                     self.buffer = self.buffer[span[1]:]
-                    return ret
+                    return bytes(ret)
 
             incoming = self.io.recv(1536)
             if incoming is None:
