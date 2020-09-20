@@ -8,7 +8,7 @@ import time
 import threading
 import socket
 import unittest
-from StringIO import StringIO
+from StringIO import StringIO as BytesIO
 import unittest
 from zio import *
 
@@ -99,7 +99,7 @@ class ZIOTestCase(unittest.TestCase):
         server = EchoServer(content=[b'hello world\n', b'\xe4\xbd\xa0\xe5\xa5\xbd\xe4\xb8\x96\xe7\x95\x8c\n'])
         server.start()
         time.sleep(0.1)
-        logfile = StringIO()
+        logfile = BytesIO()
 
         io = zio(server.target_addr(), logfile=logfile, print_read=True, print_write=False)
 
@@ -125,7 +125,7 @@ class ZIOTestCase(unittest.TestCase):
         server = EchoServer(content=[b'Welcome to Math World\n', b'input:', b'received\n'], sleep_between=0.5)
         server.start()
         time.sleep(0.1)
-        logfile = StringIO()
+        logfile = BytesIO()
 
         io = zio(server.target_addr(), logfile=logfile, print_read=True, print_write=False)
         content = io.read_until(b'input:')
@@ -145,7 +145,7 @@ class ZIOTestCase(unittest.TestCase):
         server = EchoServer(content=[b'Welcome to Math World\n', b'input:', b'received\n'], sleep_before=2, sleep_between=1)
         server.start()
         time.sleep(0.1)
-        logfile = StringIO()
+        logfile = BytesIO()
 
         io = zio(server.target_addr(), logfile=logfile, print_read=True, print_write=False)
         content = io.read_until_timeout(1.4)
@@ -176,7 +176,7 @@ class ZIOTestCase(unittest.TestCase):
         server = EchoServer(content=[b'Welcome to Math World\n', b'input:', b'received\n'], sleep_between=0.5)
         server.start()
         time.sleep(0.1)
-        logfile = StringIO()
+        logfile = BytesIO()
 
         io = zio(server.target_addr(), logfile=logfile, print_read=False, print_write=True)
         self.assertEqual(io.write(b'asdf'), 4)
@@ -184,6 +184,21 @@ class ZIOTestCase(unittest.TestCase):
 
         io.close()
         self.assertEqual(io.is_closed(), True)
+
+    # ------------------- ProcessIO Tests ---------------------
+
+    def test_send_eof(self):
+        logfile = BytesIO()
+
+        io = zio('cat', logfile=logfile, print_read=True, print_write=False)
+        io.writeline(b'____')
+
+        io.send_eof()
+        content = io.read()
+        self.assertEqual(content, b'____\n')
+        self.assertEqual(logfile.getvalue(), b'____\n')
+
+        io.close()
 
 if sys.version_info[1] < 7:
     # python2.6 shim

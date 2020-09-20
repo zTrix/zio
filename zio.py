@@ -421,7 +421,7 @@ class zio(object):
         '''
         bytes -> IO bytes
         '''
-        if self.print_read:
+        if self.print_read and byte_buf:
             content = self.read_transform(byte_buf)
             if hasattr(self.logfile, 'buffer'):
                 self.logfile.buffer.write(content)
@@ -433,7 +433,7 @@ class zio(object):
         '''
         bytes -> IO bytes
         '''
-        if self.print_write:
+        if self.print_write and byte_buf:
             content = self.write_transform(byte_buf)
             if hasattr(self.logfile, 'buffer'):
                 self.logfile.buffer.write(content)
@@ -653,6 +653,9 @@ class zio(object):
         '''
         self.io.send_eof()
 
+    sendeof = send_eof
+    end = send_eof      # for zio 1.0 compatibility
+
     def interact(self, read_transform=None, write_transform=None):
         '''
         interact with current tty stdin/stdout
@@ -833,7 +836,7 @@ class ProcessIO:
         # use another pty for stdin because we don't want our input to be echoed back in stdout
         # set echo off does not help because in application like ssh, when you input the password
         # echo will be switched on again
-        # and dont use os.pipe either, because many thing weired will happen, such as baskspace not working, ssh lftp command hang
+        # and dont use os.pipe either, because many thing weired will happen, such as backspace not working, ssh lftp command hang
 
         stdin_master_fd, stdin_slave_fd = self._pipe_cloexec() if stdin == PIPE else pty.openpty()
 
@@ -953,13 +956,19 @@ class ProcessIO:
         return None to indicate EOF
         since we use b'' to indicate empty string in case of timeout, so do not return b'' for EOF
         '''
-        b = os.read(self.rfd, size)
-        # https://docs.python.org/3/library/os.html#os.read
-        # If the end of the file referred to by fd has been reached, an empty bytes object is returned.
-        if not b:
-            self.eof_seen = True
-            return None
-        return b
+        try:
+            b = os.read(self.rfd, size)
+            # https://docs.python.org/3/library/os.html#os.read
+            # If the end of the file referred to by fd has been reached, an empty bytes object is returned.
+            if not b:
+                self.eof_seen = True
+                return None
+            return b
+        except OSError as err:
+            if err.errno == errno.EIO:
+                self.eof_seen = True
+                return None
+            raise
 
     def send(self, buf, delay=True):
         if delay:       # prevent write too fast

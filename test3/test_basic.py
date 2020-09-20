@@ -186,5 +186,20 @@ class ZIOTestCase(unittest.TestCase):
         io.close()
         self.assertEqual(io.is_closed(), True)
 
+    # ------------------- ProcessIO Tests ---------------------
+
+    def test_send_eof(self):
+        logfile = BytesIO()
+
+        io = zio('cat', logfile=logfile, print_read=True, print_write=False)
+        io.writeline(b'____')
+
+        io.send_eof()
+        content = io.read()
+        self.assertEqual(content, b'____\n')
+        self.assertEqual(logfile.getvalue(), b'____\n')
+
+        io.close()
+
 if __name__ == '__main__':
     unittest.main(verbosity=2, failfast=True)
