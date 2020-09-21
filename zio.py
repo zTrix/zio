@@ -1155,6 +1155,7 @@ class ProcessIO:
                         if e.errno != errno.EIO:
                             raise
                     if data:
+                        write_debug(self.debug, b'[ProcessIO.interact] read data = %r' % data)
                         if read_transform:
                             data = read_transform(data)
                         if show_output:
@@ -1176,6 +1177,7 @@ class ProcessIO:
                         write_debug(self.debug, b'stdin wfd mode = %r' % wfd_mode)
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
                     if data:
+                        write_debug(self.debug, b'[ProcessIO.interact] write data = %r' % data)
                         if write_transform:
                             data = write_transform(data)
                         if not os.isatty(self.wfd):
@@ -1202,6 +1204,7 @@ class ProcessIO:
                             raise
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
                     if data:
+                        write_debug(self.debug, b'[ProcessIO.interact] read remaining data = %r' % data)
                         if read_transform:
                             data = read_transform(data)
                         if show_output:

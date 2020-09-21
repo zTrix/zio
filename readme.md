@@ -25,7 +25,8 @@ io.interact()
 ## Advantage
 
  - Self contained single file installation, no extra dependency required. Copy it as you go and fire with no pain even without internet access.
- - Support both python2 and python3, no need worry about the python version installed on some unknown jump server provided by unknown.
+ - Support both python2 and python3, no need to worry about the python version installed on some weired jump server provided by unknown.
+ - Easy to learn and use.
 
 ## License
 
@@ -35,6 +36,8 @@ io.interact()
 
  - Linux or OSX
  - Python 2.6, 2.7, 3
+
+for windows support, a minimal version(socket-io only) [mini_zio](./mini_zio.py) is provided.
 
 ## Installation
 
@@ -71,11 +74,15 @@ io.interact()
 
 ## Document
 
-To be added... Please wait...
+### bytes vs unicode
+
+zio works at `bytes` level. All params and return value should be bytes. (Although some methods support unicode for compatibility and fault tolerance)
+
+The recommended practice is to use b'xxx' everywhere, which is supported by both python2 and python3 without ambiguity.
 
 ### about line break and carriage return
 
-Just don't read '\n' or '\r', use `read_line()` instead
+Just don't read b'\n' or b'\r', use `read_line()` instead
 
 ### Play with cmdline
 
@@ -103,6 +110,42 @@ show file in string repr
 ```
 $ cat somefile | ./zio.py -e repr -w none -r none -i pipe -o pipe --show-input=0 cat
 ```
+
+log vim key sequences and underlying io
+
+```
+$ zio --debug=zio.log vim
+```
+
+### Other fun usage
+
+Talk with vim using code.
+
+```
+In [1]: from zio import *
+
+In [2]: io = zio('vim', stdin=TTY, stdout=TTY)
+
+In [3]: io.writeline(b'ihello world')
+ihello world
+Out[3]: 13
+
+In [4]: io.writeline(b'\x1b:w hand_crafted_vim_file.txt')
+w hand_crafted_vim_file.txt
+Out[4]: 30
+
+In [5]: io.writeline(b':q')
+:q
+Out[5]: 3
+
+In [6]: io.exit_status()
+Out[6]: 0
+
+In [7]: !cat hand_crafted_vim_file.txt
+hello world
+```
+
+You can even talk with vim for prefix and then interact by hand to continue normal action.
 
 ## Thanks (Also references)
 
