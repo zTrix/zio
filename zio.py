@@ -53,6 +53,7 @@ import socket
 import signal
 import ast
 import time
+import datetime
 import errno
 import select
 import binascii
@@ -240,6 +241,20 @@ def write_stderr(data):
             sys.stderr.write(data.decode())
     sys.stderr.flush()
 
+def write_debug(f, data, show_time=True, end=b'\n'):
+    if not f:
+        return
+    if isinstance(data, unicode):
+        data = data.encode('latin-1')
+    if show_time:
+        now = datetime.datetime.now().strftime('[%Y-%m-%d_%H:%M:%S]').encode()
+        f.write(now)
+        f.write(b' ')
+    f.write(data)
+    if end:
+        f.write(end)
+    f.flush()
+    
 # -------------------------------------------------
 # =====> zio class modes and params <=====
 
@@ -396,7 +411,7 @@ class zio(object):
             timeout: int, the global timeout for this zio object
             logfile: where to print traffic data in or out from target, default to sys.stderr
             debug: if set to a file object(must be opened using binary mode), will provide info for debugging zio internal. leave it to None by default.
-            stdin(ProcessIO only): {PIPE, TTY, TTY_RAW} which mode to choose for child process stdin
+            stdin(ProcessIO only): {PIPE, TTY, TTY_RAW} which mode to choose for child process stdin, PIPE is recommended for programming interface, since you will need to take care of tty control chars by hand when call write methods if stdin set to TTY mode.
             stdout(ProcessIO only): {PIPE, TTY, TTY_RAW} which mode to choose for child process stdout
             cwd(ProcessIO only): the working directory to spawn child process
             env(ProcessIO only): env variables for child process
@@ -772,9 +787,7 @@ class SocketIO:
             return b
         except Exception as ex:
             self.exit_code = 1    # recv exception
-            if self.debug:
-                self.debug.write(b'SocketIO recv exception: %r\n' % ex)
-                self.debug.flush()
+            write_debug(self.debug, b'SocketIO recv exception: %r\n' % ex)
             raise
 
     def send(self, buf):
@@ -782,9 +795,7 @@ class SocketIO:
             return self.sock.sendall(buf)
         except Exception as ex:
             self.exit_code = 2    # send exception
-            if self.debug:
-                self.debug.write(b'SocketIO send exception: %r\n' % ex)
-                self.debug.flush()
+            write_debug(self.debug, b'SocketIO send exception: %r\n' % ex)
             raise
 
     def send_eof(self):
@@ -835,9 +846,7 @@ class SocketIO:
                 self.exit_code = 0
         except Exception as ex:
             self.exit_code = 3    # close exception
-            if self.debug:
-                self.debug.write(b'SocketIO send exception: %r\n' % ex)
-                self.debug.flush()
+            write_debug(self.debug, b'SocketIO close exception: %r\n' % ex)
             raise
 
     def is_closed(self):
@@ -908,6 +917,7 @@ class ProcessIO:
         # and dont use os.pipe either, because many thing weired will happen, such as backspace not working, ssh lftp command hang
 
         stdin_master_fd, stdin_slave_fd = self._pipe_cloexec() if stdin == PIPE else pty.openpty()
+        # write_debug(self.debug, b'stdin == %r, stdin_master_fd isatty = %r' % (stdin, os.isatty(stdin_master_fd)))
 
         if stdin_master_fd < 0 or stdin_slave_fd < 0:
             raise RuntimeError('Could not openpty for stdin')
@@ -939,9 +949,7 @@ class ProcessIO:
                     h, w = self._getwinsize(pty.STDIN_FILENO)
                     self._setwinsize(stdout_slave_fd, h, w)     # note that this may not be successful
             except BaseException as ex:
-                if self.debug:
-                    self.debug.write(b'[ WARN ] setwinsize exception: %r\n' % ex)
-                    self.debug.flush()
+                write_debug(self.debug, b'[ WARN ][ProcessIO.__init__] setwinsize exception: %r\n' % ex)
 
             # Dup fds for child
             def _dup2(a, b):
@@ -1008,9 +1016,7 @@ class ProcessIO:
                 if stdout == TTY_RAW:
                     self._ttyraw(self.rfd, raw_in = False, raw_out = True)
                     self._rfd_raw_mode = tty.tcgetattr(self.rfd)[:]
-                    if self.debug:
-                        self.debug.write(b'stdout tty raw mode: %r\n' % self._rfd_raw_mode)
-                        self.debug.flush()
+                    write_debug(self.debug, b'stdout tty raw mode: %r\n' % self._rfd_raw_mode)
                 else:
                     self._rfd_raw_mode = self._rfd_init_mode[:]
 
@@ -1079,31 +1085,36 @@ class ProcessIO:
         when stdin is passed using os.pipe, backspace key will not work as expected,
         if wfd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so you should choose the right input when using zio
         """
-        if show_input is None:
-            show_input = True
         if show_output is None:
             show_output = True
 
-        # if input_filter is not none, we should let user do some line editing
-        if os.isatty(pty.STDIN_FILENO):
-            mode = tty.tcgetattr(pty.STDIN_FILENO)  # mode will be restored after interact
-            self._ttyraw(pty.STDIN_FILENO)           # set to raw mode to pass all input thru, supporting apps as vim
+        # if stdin is in TTY/TTY_RAW, we passthrough to let the inner tty handle everything
+        # if wfd is a pipe, we keep parent tty in cooked mode, so line editing still works
+        parent_tty_mode = None
+        if os.isatty(pty.STDIN_FILENO) and os.isatty(self.wfd):
+            parent_tty_mode = tty.tcgetattr(pty.STDIN_FILENO)   # save mode and restore after interact
+            self._ttyraw(pty.STDIN_FILENO)                      # set to raw mode to pass all input thru, supporting apps as vim
+            write_debug(self.debug, b'parent tty set to raw mode')
+
+            if show_input is None:
+                show_input = True       # do echo from underlying echo back
+        else:
+            if show_input is None:
+                show_input = False      # parent tty in cooked mode and itself has echo back
+
         if os.isatty(self.wfd):
             # here, enable cooked mode for process stdin
             # but we should only enable for those who need cooked mode, not stuff like vim
             # we just do a simple detection here
             wfd_mode = tty.tcgetattr(self.wfd)
-            if self.debug:
-                self.debug.write(b'wfd now mode = %r\n' % wfd_mode)
-                self.debug.write(b'wfd raw mode = %r\n' % self._wfd_raw_mode)
-                self.debug.write(b'wfd ini mode = %r\n' % self._wfd_init_mode)
-                self.debug.flush()
+
+            write_debug(self.debug, b'wfd now mode = %r\n' % wfd_mode)
+            write_debug(self.debug, b'wfd raw mode = %r\n' % self._wfd_raw_mode)
+            write_debug(self.debug, b'wfd ini mode = %r\n' % self._wfd_init_mode)
 
             if wfd_mode == self._wfd_raw_mode:     # if untouched by forked child
                 tty.tcsetattr(self.wfd, tty.TCSAFLUSH, self._wfd_init_mode)
-                if self.debug:
-                    self.debug(b'change wfd back to init mode\n')
-                    self.debug.flush()
+                write_debug(self.debug, b'change wfd back to init mode\n')
             # but wait, things here are far more complex than that
             # most applications set mode not by setting it to some value, but by flipping some bits in the flags
             # so, if we set wfd raw mode at the beginning, we are unable to set the correct mode here
@@ -1123,9 +1134,7 @@ class ProcessIO:
                     r, _w, _e = select_ignoring_useless_signal(rfdlist, [], [])
                 except KeyboardInterrupt:
                     break
-                if self.debug:
-                    self.debug.write(b'[ProcessIO.interact] r = %r\n' % r)
-                    self.debug.flush()
+
                 if self.wfd in r:          # handle tty echo back first if wfd is a tty
                     try:
                         data = None
@@ -1164,8 +1173,7 @@ class ProcessIO:
                             raise
                     if self.debug and os.isatty(self.wfd):
                         wfd_mode = tty.tcgetattr(self.wfd)
-                        self.debug.write(b'stdin wfd mode = %r' % wfd_mode)
-                        self.debug.flush()
+                        write_debug(self.debug, b'stdin wfd mode = %r' % wfd_mode)
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
                     if data:
                         if write_transform:
@@ -1204,8 +1212,8 @@ class ProcessIO:
                 else:
                     break
         finally:
-            if os.isatty(pty.STDIN_FILENO):
-                tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, mode)
+            if parent_tty_mode:
+                tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, parent_tty_mode)
             if os.isatty(self.wfd):
                 self._ttyraw(self.wfd)
 
