@@ -314,7 +314,7 @@ def HEX(s): return bytes2hex(s) + b'\r\n'
 TOHEX = HEX
 def UNHEX(s): return hex2bytes(s)
 
-def HEXDUMP(byte_buf, width=16):
+def HEXDUMP(byte_buf, width=16, indent=0):
     length = len(byte_buf)
     lines = (length // width) + (length % width != 0)
     ret = []
@@ -345,8 +345,12 @@ def HEXDUMP(byte_buf, width=16):
         elif len(hexcode) < hexcode_width:
             hexcode = hexcode.ljust(hexcode_width, b' ')
 
-        ret.append(b'%s:%s  %s\n' % (prefix, hexcode, printable))
+        ret.append(b'%s%s:%s  %s\n' % (b' ' * indent, prefix, hexcode, printable))
     return b''.join(ret)
+
+HEXDUMP_INDENT4 = functools.partial(HEXDUMP, indent=4)
+HEXDUMP_INDENT8 = functools.partial(HEXDUMP, indent=8)
+HEXDUMP_INDENT16 = functools.partial(HEXDUMP, indent=16)
 
 if python_version_major < 3:
     def BIN(s): return b' '.join([format(ord(x),'08b') for x in str(s)]) + b'\r\n'
@@ -1728,7 +1732,7 @@ __all__ = [
     'write_stdout', 'write_stderr',
     'xor', 'bytes2hex', 'hex2bytes', 'tohex', 'unhex',
     'zio',
-    'HEX', 'TOHEX', 'UNHEX', 'EVAL', 'REPR', 'RAW', 'NONE', 'HEXDUMP',
+    'HEX', 'TOHEX', 'UNHEX', 'EVAL', 'REPR', 'RAW', 'NONE', 'HEXDUMP', 'HEXDUMP_INDENT4', 'HEXDUMP_INDENT8', 'HEXDUMP_INDENT16',
     'COLORED',
     'TTY', 'PIPE', 'TTY_RAW',
 ]
