@@ -314,6 +314,40 @@ def HEX(s): return bytes2hex(s) + b'\r\n'
 TOHEX = HEX
 def UNHEX(s): return hex2bytes(s)
 
+def HEXDUMP(byte_buf, width=16):
+    length = len(byte_buf)
+    lines = (length // width) + (length % width != 0)
+    ret = []
+
+    printable_low = b' '
+    printable_high = b'~'
+
+    hexcode_width = 0
+
+    for lino in range(lines):
+        index_begin = lino * width
+        line = byte_buf[index_begin:index_begin+width]
+
+        prefix = format('%08x' % index_begin).encode()
+        hexcode = b''
+        printable = b''
+
+        for gi in range(0, len(line), 2):
+            gd = line[gi:gi+2]
+            hexcode += b' ' + binascii.hexlify(gd)
+            
+            printable += gd[0:1] if printable_low <= gd[0:1] <= printable_high else b'.'
+            if len(gd) == 2:
+                printable += gd[1:2] if printable_low <= gd[1:2] <= printable_high else b'.'
+
+        if len(hexcode) > hexcode_width:
+            hexcode_width = len(hexcode)
+        elif len(hexcode) < hexcode_width:
+            hexcode = hexcode.ljust(hexcode_width, b' ')
+
+        ret.append(b'%s:%s  %s\n' % (prefix, hexcode, printable))
+    return b''.join(ret)
+
 if python_version_major < 3:
     def BIN(s): return b' '.join([format(ord(x),'08b') for x in str(s)]) + b'\r\n'
 else:
@@ -1694,7 +1728,7 @@ __all__ = [
     'write_stdout', 'write_stderr',
     'xor', 'bytes2hex', 'hex2bytes', 'tohex', 'unhex',
     'zio',
-    'HEX', 'TOHEX', 'UNHEX', 'EVAL', 'REPR', 'RAW', 'NONE',
+    'HEX', 'TOHEX', 'UNHEX', 'EVAL', 'REPR', 'RAW', 'NONE', 'HEXDUMP',
     'COLORED',
     'TTY', 'PIPE', 'TTY_RAW',
 ]
