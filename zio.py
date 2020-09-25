@@ -986,7 +986,7 @@ class SocketIO:
 
         # Specifically check for socat, since it has an intermediary process
         # if you do not specify "nofork" to the EXEC: argument
-        # python(2640)───socat(2642)───socat(2643)───bash(2644)
+        # python(2640) -- socat(2642) -- socat(2643) -- bash(2644)
         def fix_socat(pid):
             if not pid:
                 return None
