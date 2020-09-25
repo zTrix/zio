@@ -88,7 +88,6 @@ except ImportError:
 
 if True:
     # termcolor handled using bytes instead of unicode
-    # if termcolor import failed, use the following v1.1.0 source code of termcolor here
     # since termcolor use MIT license, SATA license above should be OK
     ATTRIBUTES = dict( list(zip([ 'bold', 'dark', '', 'underline', 'blink', '', 'reverse', 'concealed' ], list(range(1, 9)))))
     del ATTRIBUTES['']
