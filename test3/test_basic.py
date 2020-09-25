@@ -50,6 +50,8 @@ class ZIOTestCase(unittest.TestCase):
         self.assertEqual(EVAL(b'xx\\x33'), b'xx\x33')
         self.assertEqual(EVAL(b'\\\\x\\tx\\xf1\\r\\n'), b'\\x\tx\xf1\r\n')
 
+        self.assertEqual(HEXDUMP(b'_' * 16 + b'abcde'), b'00000000: 5f5f 5f5f 5f5f 5f5f 5f5f 5f5f 5f5f 5f5f  ________________\n00000010: 6162 6364 65                             abcde\n')
+
     # ------------------- SocketIO Tests ---------------------
 
     def test_socket_io(self):
