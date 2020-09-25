@@ -270,6 +270,9 @@ class ZIOTestCase(unittest.TestCase):
             mid = io.read(100)
             self.assertEqual(mid, s[600:700])
 
+            some = io.read_some()
+            self.assertEqual(some[:-1], s[700:700+len(some)-1])
+
     def test_get_pass(self):
         # here we have to use TTY, or password won't get write thru
         # if you use subprocess, you will encounter same effect 
