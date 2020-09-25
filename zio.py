@@ -47,6 +47,7 @@ __project__ = "https://github.com/zTrix/zio"
 
 import os
 import sys
+import re
 import struct
 import functools
 import socket
@@ -57,6 +58,7 @@ import datetime
 import errno
 import select
 import binascii
+import tempfile
 # for ProcessIO below
 import pty
 import shlex
@@ -582,6 +584,7 @@ class zio(object):
         return self.read(size=-1)
 
     read_all = read_to_end
+    recvall = read_to_end
 
     def read_line(self, keep=True):
         content = self.read_until(b'\n', keep=True)
@@ -632,7 +635,9 @@ class zio(object):
         '''
         just read 1 or more available bytes (less than size) and return
         '''
-        return self.io.recv(size)
+        ret = self.io.recv(size)
+        self.log_read(ret)
+        return ret
 
     recv = read_some
 
@@ -783,6 +788,55 @@ class zio(object):
 
     exit_code = exit_status
 
+    def gdb_hint(self, userscript=None, breakpoints=None):
+        '''
+        script: str
+        breakpoints: List[Union{int, (int, keyword:str)}], example: [0x400419, (0x1009, 'libc.so')]
+        '''
+        pid = self.io.target_pid()
+        if not pid:
+            input('unable to find target pid to attach gdb')
+            return
+        
+        gdb_cmd = ['attach %d' % pid, 'set disassembly-flavor intel']
+
+        vmmap = open('/proc/%d/maps' % pid).read()
+        vmmap_lines = vmmap.splitlines()
+
+        if breakpoints:
+            for b in breakpoints:
+                if isinstance(b, (tuple, list)):
+                    found = False
+                    for line in vmmap_lines:
+                        if b[1].lower() in line.lower():
+                            base = int(line.split('-')[0], 16)
+                            gdb_cmd.append('b *' + hex(base + b[0]))
+                            found = True
+                            break
+                    if not found:
+                        print('[ WARN ] keyword not found for breakpoint base address: %r' % b)
+                elif isinstance(b, int):
+                    gdb_cmd.append('b *' + hex(b))
+                elif isinstance(b, type('')):
+                    gdb_cmd.append('b *' + b)
+                else:
+                    print('[ WARN ] bad breakpoint: %r' % b)
+
+        if not userscript:
+            userscript = ''
+        if isinstance(userscript, bytes):
+            userscript = userscript.decode('utf-8')
+
+        gdb_script = '\n'.join(gdb_cmd) + '\n\n' + userscript + '\n'
+
+        tf = tempfile.NamedTemporaryFile(mode="w", suffix='.zio.gdbx')
+        tf.write(gdb_script)
+        tf.flush()
+
+        hint = "gdb -x %s" % tf.name
+        hint += '\nuse cmdline above to attach gdb then press enter to continue ... '
+        input(hint)
+
     def __str__(self):
         return '<zio target=%s, timeout=%s, io=%s, buffer=%s>' % (self.target, self.timeout, str(self.io), self.buffer)
 
@@ -816,6 +870,8 @@ class SocketIO:
         return None to indicate EOF
         since we use b'' to indicate empty string in case of timeout, so do not return b'' for EOF
         '''
+        if size is None:    # socket.recv does not allow None or -1 as argument
+            size = 8192
         try:
             b = self.sock.recv(size)
             if not b:
@@ -896,10 +952,63 @@ class SocketIO:
     def exit_status(self):
         return self.exit_code
 
+    def target_pid(self):       # code borrowed from https://github.com/Gallopsled/pwntools to implement gdb attach of local socket
+        all_pids = [int(pid) for pid in os.listdir('/proc') if pid.isdigit()]
+
+        def getpid(loc, rem):
+            loc = b'%08X:%04X' % (l32(socket.inet_aton(loc[0])), loc[1])
+            rem = b'%08X:%04X' % (l32(socket.inet_aton(rem[0])), rem[1])
+            inode = None
+            with open('/proc/net/tcp', 'rb') as fd:
+                for line in fd:
+                    line = line.split()
+                    if line[1] == loc and line[2] == rem:
+                        inode = line[9]
+            if inode == None:
+                return None
+            for pid in all_pids:
+                try:
+                    for fd in os.listdir('/proc/%d/fd' % pid):
+                        fd = os.readlink('/proc/%d/fd/%s' % (pid, fd))
+                        m = re.match(r'socket:\[(\d+)\]', fd)
+                        if m:
+                            this_inode = m.group(1)
+                            if this_inode.encode() == inode:
+                                return pid
+                except:
+                    pass
+
+        # Specifically check for socat, since it has an intermediary process
+        # if you do not specify "nofork" to the EXEC: argument
+        # python(2640)───socat(2642)───socat(2643)───bash(2644)
+        def fix_socat(pid):
+            if not pid:
+                return None
+            exe_path = os.readlink('/proc/%d/exe' % pid)
+            if os.path.basename(exe_path) == 'socat':
+                for p in all_pids:
+                    try:
+                        with open("/proc/%s/stat" % p, 'rb') as f:
+                            data = f.read()
+                            rpar = data.rfind(b')')
+                            dset = data[rpar + 2:].split()
+                            if int(dset[1]) == pid:
+                                return int(data.split()[0])
+                    except:
+                        pass
+            return None
+
+        sock = self.sock.getsockname()
+        peer = self.sock.getpeername()
+
+        pid = getpid(peer, sock)
+        if pid: return fix_socat(pid)
+
+        pid = getpid(sock, peer)
+        return fix_socat(pid)
+
     def __str__(self):
-        return '<SocketIO ' \
-            + 'self.sock=' + repr(self.sock) \
-            + '>'
+        return '<SocketIO ' + 'self.sock=' + repr(self.sock) + '>'
 
     def __repr__(self):
         return repr(self.sock)
@@ -1285,6 +1394,9 @@ class ProcessIO:
         if self.exit_code is None:
             self._isalive()     # will modify exit_code if not alive
         return self.exit_code
+
+    def target_pid(self):
+        return self.pid
 
     def __str__(self):
         return '<ProcessIO cmdline=%s>' % (self.args)
