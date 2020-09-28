@@ -269,7 +269,8 @@ class ZIOTestCase(unittest.TestCase):
             self.assertEqual(mid, s[600:700])
 
             some = io.read_some()
-            self.assertEqual(some[:-1], s[700:700+len(some)-1])
+            min_len = min(len(some) - 2, 300)
+            self.assertEqual(some[:min_len], s[700:700+min_len])
 
     def test_get_pass(self):
         # here we have to use TTY, or password won't get write thru
