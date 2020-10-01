@@ -6,7 +6,7 @@ cd "${0%/*}" && pwd
 
 PYTHON=`which python2 || which python`
 
-PYVER=`$PYTHON -V`
+PYVER=`$PYTHON -V 2>&1`
 
 case $PYVER in
 
