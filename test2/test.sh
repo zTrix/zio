@@ -6,4 +6,16 @@ cd "${0%/*}" && pwd
 
 PYTHON=`which python2 || which python`
 
-$PYTHON ./test_basic.py
+PYVER=`$PYTHON -V`
+
+case $PYVER in
+
+"Python 2"*)
+    $PYTHON ./test_basic.py
+    ;;
+
+*)
+    echo "found PYVER=$PYVER, not Python2, skip test"
+    ;;
+esac
+

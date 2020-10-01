@@ -1,9 +1,10 @@
 language: python
 python:
-  - "2.6"
   - "2.7"
+  - "3.5"
+  - "3.7"
 install:
-  - "sudo apt-get install --no-install-recommends socat"
-  - "pip install termcolor"
+  - "sudo apt-get install -y --no-install-recommends socat"
 script: 
-  - python test/test.py
+  - ./test2/test.sh
+  - ./test3/test.sh
