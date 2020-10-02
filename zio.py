@@ -79,6 +79,8 @@ python_version_major = sys.version_info[0]      # do not use sys.version_info.ma
 # python2 python3 shim
 if python_version_major < 3:
     input = raw_input           # pylint: disable=undefined-variable
+
+    class TimeoutError(OSError): pass   # from ptyprocess.py, issubclass(TimeoutError, OSError) == True
 else:
     unicode = str
     unichr = chr
@@ -430,6 +432,7 @@ class zio(object):
         env=None,
         sighup=signal.SIG_DFL,
         write_delay=0.05,
+        read_echoback=True,
     ):
         """
         zio is an easy-to-use io library for pwning development, supporting an unified interface for local process pwning and remote tcp socket io
@@ -476,7 +479,7 @@ class zio(object):
         if isinstance(timeout, int) and timeout > 0:
             self.timeout = timeout
         else:
-            self.timeout = 16
+            self.timeout = 10
 
         if is_hostport_tuple(self.target) or isinstance(self.target, socket.socket):
             self.io = SocketIO(self.target, timeout=self.timeout, debug=debug)
@@ -488,13 +491,14 @@ class zio(object):
                 env=env,
                 sighup=sighup,
                 write_delay=write_delay,
+                read_echoback=read_echoback,
                 )
 
     def log_read(self, byte_buf):
         '''
         bytes -> IO bytes
         '''
-        if self.print_read and byte_buf:
+        if self.print_read and byte_buf is not None:   # should log when byte_buf is empty bytestring
             content = self.read_transform(byte_buf)
             if hasattr(self.logfile, 'buffer'):
                 self.logfile.buffer.write(content)
@@ -506,7 +510,7 @@ class zio(object):
         '''
         bytes -> IO bytes
         '''
-        if self.print_write and byte_buf:
+        if self.print_write and byte_buf is not None:   # should log when byte_buf is empty bytestring
             content = self.write_transform(byte_buf)
             if hasattr(self.logfile, 'buffer'):
                 self.logfile.buffer.write(content)
@@ -566,7 +570,7 @@ class zio(object):
                         self.log_read(ret)
                         return ret
                     else:
-                        raise EOFError('EOF occured before full size read, buffer = %s' % self.buffer)
+                        raise EOFError('EOF occured before full size read, buffer = %r' % self.buffer)
                 self.buffer.extend(incoming)
 
             if not is_read_all and len(self.buffer) >= size:
@@ -623,7 +627,7 @@ class zio(object):
 
             incoming = self.io.recv(1536)
             if incoming is None:
-                raise EOFError('EOF occured before pattern match, buffer = %s' % self.buffer)
+                raise EOFError('EOF occured before pattern match, buffer = %r' % self.buffer)
 
             self.buffer.extend(incoming)
 
@@ -880,13 +884,14 @@ class SocketIO:
             size = 8192
         try:
             b = self.sock.recv(size)
+            write_debug(self.debug, b'SocketIO.recv(%r) -> %r' % (size, b))
             if not b:
                 self.eof_seen = True
                 return None
             return b
         except Exception as ex:
             self.exit_code = 1    # recv exception
-            write_debug(self.debug, b'SocketIO recv exception: %r\n' % ex)
+            write_debug(self.debug, b'SocketIO.recv(%r) exception: %r' % (size, ex))
             raise
 
     def send(self, buf):
@@ -894,12 +899,13 @@ class SocketIO:
             return self.sock.sendall(buf)
         except Exception as ex:
             self.exit_code = 2    # send exception
-            write_debug(self.debug, b'SocketIO send exception: %r\n' % ex)
+            write_debug(self.debug, b'SocketIO.send(%r) exception: %r' % (buf, ex))
             raise
 
     def send_eof(self):
         self.eof_sent = True
         self.sock.shutdown(socket.SHUT_WR)
+        write_debug(self.debug, b'SocketIO.send_eof()')
 
     def interact(self, read_transform=None, write_transform=None, show_input=None, show_output=None):
         if show_input is None:
@@ -945,7 +951,7 @@ class SocketIO:
                 self.exit_code = 0
         except Exception as ex:
             self.exit_code = 3    # close exception
-            write_debug(self.debug, b'SocketIO close exception: %r\n' % ex)
+            write_debug(self.debug, b'SocketIO.close() exception: %r' % ex)
             raise
 
     def is_closed(self):
@@ -1022,7 +1028,7 @@ class SocketIO:
 class ProcessIO:
     mode = 'process'
 
-    def __init__(self, target, timeout=None, stdin=PIPE, stdout=TTY_RAW, cwd=None, env=None, sighup=None, write_delay=None, debug=None):
+    def __init__(self, target, timeout=None, debug=None, stdin=PIPE, stdout=TTY_RAW, cwd=None, env=None, sighup=None, write_delay=None, read_echoback=True):
         if os.name == 'nt':
             raise RuntimeError("zio (version %s) process mode does not support windows operation system." % __version__)
 
@@ -1030,6 +1036,8 @@ class ProcessIO:
         self.debug = debug
 
         self.write_delay = write_delay  # the delay before writing data, pexcept said Linux don't like this to be below 30ms
+        self.read_echoback = read_echoback
+
         self.close_delay = 0.1          # like pexcept, will used by close(), to give kernel time to update process status, time in seconds
         self.terminate_delay = 0.1      # like close_delay
 
@@ -1101,7 +1109,7 @@ class ProcessIO:
                     h, w = self._getwinsize(pty.STDIN_FILENO)
                     self._setwinsize(stdout_slave_fd, h, w)     # note that this may not be successful
             except BaseException as ex:
-                write_debug(self.debug, b'[ WARN ][ProcessIO.__init__] setwinsize exception: %r\n' % ex)
+                write_debug(self.debug, b'[ WARN ] ProcessIO.__init__(%r) setwinsize exception: %r' % (target, ex))
 
             # Dup fds for child
             def _dup2(a, b):
@@ -1189,25 +1197,85 @@ class ProcessIO:
         '''
         if size is None:    # os.read does not allow None or -1 as argument
             size = 8192
-        try:
-            b = os.read(self.rfd, size)
-            # https://docs.python.org/3/library/os.html#os.read
-            # If the end of the file referred to by fd has been reached, an empty bytes object is returned.
-            if not b:                       # BSD style
+
+        timeout = self.timeout
+
+        # Note that some systems such as Solaris do not give an EOF when
+        # the child dies. In fact, you can still try to read
+        # from the child_fd -- it will block forever or until TIMEOUT.
+        # For this case, I test isalive() before doing any reading.
+        # If isalive() is false, then I pretend that this is the same as EOF.
+        if not self._isalive():
+            # timeout of 0 means "poll"
+            r, w, e = select_ignoring_useless_signal([self.rfd], [], [], 0)
+            if not r:
                 self.eof_seen = True
-                return None
-            return b
-        except OSError as err:
-            if err.errno in (errno.EIO, errno.EBADF):      # Linux does this
-                # EIO:   OSError: [Errno 5] Input/Output Error
-                # EBADF: OSError: [Errno 9] Bad file descriptor
-                self.eof_seen = True
-                return None
-            raise
+                raise EOFError('End Of File (EOF). Braindead platform.')
+
+        if timeout is not None and timeout > 0:
+            end_time = time.time() + timeout
+        else:
+            end_time = float('inf')
+
+        readfds = [self.rfd]
+
+        if self.read_echoback:
+            try:
+                os.fstat(self.wfd)
+                readfds.append(self.wfd)
+            except:
+                pass
+
+        while True:
+            now = time.time()
+            if now > end_time:
+                raise TimeoutError('Timeout exceeded.')
+
+            if timeout is not None and timeout > 0:
+                timeout = end_time - now
+
+            r, w, e = select_ignoring_useless_signal(readfds, [], [], timeout)
+            if not r:
+                if not self._isalive():
+                    # Some platforms, such as Irix, will claim that their
+                    # processes are alive; timeout on the select; and
+                    # then finally admit that they are not alive.
+                    self.eof_seen = True
+                    raise EOFError('End of File (EOF). Very slow platform.')
+
+            if self.wfd in r:
+                try:
+                    data = os.read(self.wfd, size)
+                    write_debug(self.debug, b'ProcessIO.recv(%r)[wfd=%s] -> %r' % (size, self.wfd, data))
+                    if data:
+                        return data
+                except OSError as err:
+                    # wfd read EOF (echo back)
+                    pass
+
+            if self.rfd in r:
+                try:
+                    b = os.read(self.rfd, size)
+                    write_debug(self.debug, b'ProcessIO.recv(%r) -> %r' % (size, b))
+                    # https://docs.python.org/3/library/os.html#os.read
+                    # If the end of the file referred to by fd has been reached, an empty bytes object is returned.
+                    if not b:                       # BSD style
+                        self.eof_seen = True
+                        return None
+                    return b
+                except OSError as err:
+                    write_debug(self.debug, b'ProcessIO.recv(%r) raise OSError %r' % (size, err))
+                    if err.errno in (errno.EIO, errno.EBADF):      # Linux does this
+                        # EIO:   OSError: [Errno 5] Input/Output Error
+                        # EBADF: OSError: [Errno 9] Bad file descriptor
+                        self.eof_seen = True
+                        return None
+                    raise
 
     def send(self, buf, delay=True):
         if delay:       # prevent write too fast
             time.sleep(self.write_delay)
+        write_debug(self.debug, b'ProcessIO.send(%r)' % buf)
         return os.write(self.wfd, buf)
 
     def send_eof(self, force_close=False):
@@ -1291,6 +1359,7 @@ class ProcessIO:
                     try:
                         data = None
                         data = os.read(self.wfd, 1024)
+                        write_debug(self.debug, b'[ProcessIO.interact] read data from wfd = %r' % data)
                     except OSError as e:
                         if e.errno != errno.EIO:
                             raise
@@ -1303,11 +1372,11 @@ class ProcessIO:
                     try:
                         data = None
                         data = os.read(self.rfd, 1024)
+                        write_debug(self.debug, b'[ProcessIO.interact] read data from rfd = %r' % data)
                     except OSError as e:
                         if e.errno != errno.EIO:
                             raise
                     if data:
-                        write_debug(self.debug, b'[ProcessIO.interact] read data = %r' % data)
                         if read_transform:
                             data = read_transform(data)
                         if show_output:

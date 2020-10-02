@@ -275,12 +275,12 @@ class ZIOTestCase(unittest.TestCase):
     def test_get_pass(self):
         # here we have to use TTY, or password won't get write thru
         # if you use subprocess, you will encounter same effect 
-        for io in exec_script('userpass.py', stdin=TTY):
+        for io in exec_script('userpass.py', stdin=TTY, read_echoback=True):
             io.read_until(b'Welcome')
             io.read_line()
             io.read_until(b'Username: ')
             io.write_line(b'user')
-            io.read_until(b'Password: ')   # note the 'stream = sys.stdout' line in userpass.py, which makes this prompt readable here, else Password will be echoed back from stdin(tty), not stdout, so you will never read this!!
+            io.read_until(b'Password: ')    # read_echoback must be set to True to make this work
             io.write_line(b'pass')
             io.read_line()
             line = io.read_line()
