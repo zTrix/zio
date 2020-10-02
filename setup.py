@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 
 from distutils.core import setup
 from setuptools import find_packages
@@ -21,7 +21,7 @@ setup(
     py_modules = ['zio'],
 
     # Refers to test/test.py
-    test_suite='test.test',
+    # test_suite='test.test',
 
     entry_points = {
         'console_scripts': [
@@ -37,6 +37,10 @@ setup(
         'Programming Language :: Python',
         'Programming Language :: Python :: 2.6',
         'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 3.5',
+        'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3.8',
         'Topic :: Software Development',
         'Topic :: System',
         'Topic :: Terminals',
