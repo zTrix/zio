@@ -51,7 +51,7 @@ jobs:
         - ./test3/test.sh
     - name: 'test python2.7 on macOS'
       os: osx
-      osx_image: xcode9.3  # Python 2.7.14 
+      osx_image: xcode10.1  # Python 2.7.15 
       language: shell      # 'language: python' is an error on Travis CI macOS
       addons:
         homebrew:
