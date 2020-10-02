@@ -39,3 +39,23 @@ jobs:
         - "sudo apt-get install -y --no-install-recommends socat"
       script: 
         - ./test2/test.sh
+    - name: 'test python3 on macOS'
+      os: osx
+      osx_image: xcode11.2 # Python 3.7.4 running on macOS 10.14.4
+      language: shell      # 'language: python' is an error on Travis CI macOS
+      addons:
+        homebrew:
+          packages:
+            - socat
+      script: 
+        - ./test3/test.sh
+    - name: 'test python2.7 on macOS'
+      os: osx
+      osx_image: xcode9.3  # Python 2.7.14 
+      language: shell      # 'language: python' is an error on Travis CI macOS
+      addons:
+        homebrew:
+          packages:
+            - socat
+      script: 
+        - ./test2/test.sh
