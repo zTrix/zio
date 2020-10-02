@@ -557,6 +557,7 @@ class zio(object):
         if size is -1 or None, then read all bytes available until EOF
         if size is a positive integer, read exactly `size` bytes and return
         raise EOFError if EOF occurred before full size read
+        raise TimeoutError if Timeout occured
         '''
         is_read_all = size is None or size < 0
         while True:
@@ -884,14 +885,16 @@ class SocketIO:
             size = 8192
         try:
             b = self.sock.recv(size)
-            write_debug(self.debug, b'SocketIO.recv(%r) -> %r' % (size, b))
+            if self.debug: write_debug(self.debug, b'SocketIO.recv(%r) -> %r' % (size, b))
             if not b:
                 self.eof_seen = True
                 return None
             return b
+        except socket.timeout:
+            raise TimeoutError('socket.timeout')    # translate to TimeoutError
         except Exception as ex:
             self.exit_code = 1    # recv exception
-            write_debug(self.debug, b'SocketIO.recv(%r) exception: %r' % (size, ex))
+            if self.debug: write_debug(self.debug, b'SocketIO.recv(%r) exception: %r' % (size, ex))
             raise
 
     def send(self, buf):
@@ -899,13 +902,13 @@ class SocketIO:
             return self.sock.sendall(buf)
         except Exception as ex:
             self.exit_code = 2    # send exception
-            write_debug(self.debug, b'SocketIO.send(%r) exception: %r' % (buf, ex))
+            if self.debug: write_debug(self.debug, b'SocketIO.send(%r) exception: %r' % (buf, ex))
             raise
 
     def send_eof(self):
         self.eof_sent = True
         self.sock.shutdown(socket.SHUT_WR)
-        write_debug(self.debug, b'SocketIO.send_eof()')
+        if self.debug: write_debug(self.debug, b'SocketIO.send_eof()')
 
     def interact(self, read_transform=None, write_transform=None, show_input=None, show_output=None):
         if show_input is None:
@@ -951,7 +954,7 @@ class SocketIO:
                 self.exit_code = 0
         except Exception as ex:
             self.exit_code = 3    # close exception
-            write_debug(self.debug, b'SocketIO.close() exception: %r' % ex)
+            if self.debug: write_debug(self.debug, b'SocketIO.close() exception: %r' % ex)
             raise
 
     def is_closed(self):
@@ -1109,7 +1112,7 @@ class ProcessIO:
                     h, w = self._getwinsize(pty.STDIN_FILENO)
                     self._setwinsize(stdout_slave_fd, h, w)     # note that this may not be successful
             except BaseException as ex:
-                write_debug(self.debug, b'[ WARN ] ProcessIO.__init__(%r) setwinsize exception: %r' % (target, ex))
+                if self.debug: write_debug(self.debug, b'[ WARN ] ProcessIO.__init__(%r) setwinsize exception: %r' % (target, ex))
 
             # Dup fds for child
             def _dup2(a, b):
@@ -1176,7 +1179,7 @@ class ProcessIO:
                 if stdout == TTY_RAW:
                     self._ttyraw(self.rfd, raw_in = False, raw_out = True)
                     self._rfd_raw_mode = tty.tcgetattr(self.rfd)[:]
-                    write_debug(self.debug, b'stdout tty raw mode: %r\n' % self._rfd_raw_mode)
+                    if self.debug: write_debug(self.debug, b'stdout tty raw mode: %r\n' % self._rfd_raw_mode)
                 else:
                     self._rfd_raw_mode = self._rfd_init_mode[:]
 
@@ -1246,7 +1249,7 @@ class ProcessIO:
             if self.wfd in r:
                 try:
                     data = os.read(self.wfd, size)
-                    write_debug(self.debug, b'ProcessIO.recv(%r)[wfd=%r] -> %r' % (size, self.wfd, data))
+                    if self.debug: write_debug(self.debug, b'ProcessIO.recv(%r)[wfd=%r] -> %r' % (size, self.wfd, data))
                     if data:
                         return data
                 except OSError as err:
@@ -1256,7 +1259,7 @@ class ProcessIO:
             if self.rfd in r:
                 try:
                     b = os.read(self.rfd, size)
-                    write_debug(self.debug, b'ProcessIO.recv(%r) -> %r' % (size, b))
+                    if self.debug: write_debug(self.debug, b'ProcessIO.recv(%r) -> %r' % (size, b))
                     # https://docs.python.org/3/library/os.html#os.read
                     # If the end of the file referred to by fd has been reached, an empty bytes object is returned.
                     if not b:                       # BSD style
@@ -1264,7 +1267,7 @@ class ProcessIO:
                         return None
                     return b
                 except OSError as err:
-                    write_debug(self.debug, b'ProcessIO.recv(%r) raise OSError %r' % (size, err))
+                    if self.debug: write_debug(self.debug, b'ProcessIO.recv(%r) raise OSError %r' % (size, err))
                     if err.errno in (errno.EIO, errno.EBADF):      # Linux does this
                         # EIO:   OSError: [Errno 5] Input/Output Error
                         # EBADF: OSError: [Errno 9] Bad file descriptor
@@ -1275,7 +1278,7 @@ class ProcessIO:
     def send(self, buf, delay=True):
         if delay:       # prevent write too fast
             time.sleep(self.write_delay)
-        write_debug(self.debug, b'ProcessIO.send(%r)' % buf)
+        if self.debug: write_debug(self.debug, b'ProcessIO.send(%r)' % buf)
         return os.write(self.wfd, buf)
 
     def send_eof(self, force_close=False):
@@ -1314,7 +1317,7 @@ class ProcessIO:
         if os.isatty(pty.STDIN_FILENO) and os.isatty(self.wfd):
             parent_tty_mode = tty.tcgetattr(pty.STDIN_FILENO)   # save mode and restore after interact
             self._ttyraw(pty.STDIN_FILENO)                      # set to raw mode to pass all input thru, supporting apps as vim
-            write_debug(self.debug, b'parent tty set to raw mode')
+            if self.debug: write_debug(self.debug, b'parent tty set to raw mode')
 
             if show_input is None:
                 show_input = True       # do echo from underlying echo back
@@ -1328,13 +1331,13 @@ class ProcessIO:
             # we just do a simple detection here
             wfd_mode = tty.tcgetattr(self.wfd)
 
-            write_debug(self.debug, b'wfd now mode = %r\n' % wfd_mode)
-            write_debug(self.debug, b'wfd raw mode = %r\n' % self._wfd_raw_mode)
-            write_debug(self.debug, b'wfd ini mode = %r\n' % self._wfd_init_mode)
+            if self.debug: write_debug(self.debug, b'wfd now mode = %r\n' % wfd_mode)
+            if self.debug: write_debug(self.debug, b'wfd raw mode = %r\n' % self._wfd_raw_mode)
+            if self.debug: write_debug(self.debug, b'wfd ini mode = %r\n' % self._wfd_init_mode)
 
             if wfd_mode == self._wfd_raw_mode:     # if untouched by forked child
                 tty.tcsetattr(self.wfd, tty.TCSAFLUSH, self._wfd_init_mode)
-                write_debug(self.debug, b'change wfd back to init mode\n')
+                if self.debug: write_debug(self.debug, b'change wfd back to init mode\n')
             # but wait, things here are far more complex than that
             # most applications set mode not by setting it to some value, but by flipping some bits in the flags
             # so, if we set wfd raw mode at the beginning, we are unable to set the correct mode here
@@ -1359,7 +1362,7 @@ class ProcessIO:
                     try:
                         data = None
                         data = os.read(self.wfd, 1024)
-                        write_debug(self.debug, b'[ProcessIO.interact] read data from wfd = %r' % data)
+                        if self.debug: write_debug(self.debug, b'[ProcessIO.interact] read data from wfd = %r' % data)
                     except OSError as e:
                         if e.errno != errno.EIO:
                             raise
@@ -1372,7 +1375,7 @@ class ProcessIO:
                     try:
                         data = None
                         data = os.read(self.rfd, 1024)
-                        write_debug(self.debug, b'[ProcessIO.interact] read data from rfd = %r' % data)
+                        if self.debug: write_debug(self.debug, b'[ProcessIO.interact] read data from rfd = %r' % data)
                     except OSError as e:
                         if e.errno != errno.EIO:
                             raise
@@ -1395,10 +1398,10 @@ class ProcessIO:
                             raise
                     if self.debug and os.isatty(self.wfd):
                         wfd_mode = tty.tcgetattr(self.wfd)
-                        write_debug(self.debug, b'stdin wfd mode = %r' % wfd_mode)
+                        if self.debug: write_debug(self.debug, b'stdin wfd mode = %r' % wfd_mode)
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
                     if data:
-                        write_debug(self.debug, b'[ProcessIO.interact] write data = %r' % data)
+                        if self.debug: write_debug(self.debug, b'[ProcessIO.interact] write data = %r' % data)
                         if write_transform:
                             data = write_transform(data)
                         if not os.isatty(self.wfd):
@@ -1425,7 +1428,7 @@ class ProcessIO:
                             raise
                     # in BSD, you can still read '' from rfd, so never use `data is not None` here
                     if data:
-                        write_debug(self.debug, b'[ProcessIO.interact] read remaining data = %r' % data)
+                        if self.debug: write_debug(self.debug, b'[ProcessIO.interact] read remaining data = %r' % data)
                         if read_transform:
                             data = read_transform(data)
                         if show_output:
@@ -1922,5 +1925,8 @@ __all__ = [
     'COLORED',
     'TTY', 'PIPE', 'TTY_RAW',
 ]
+
+if python_version_major < 3:
+    __all__.append('TimeoutError')
 
 # vi:set et ts=4 sw=4 ft=python :

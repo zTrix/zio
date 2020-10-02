@@ -272,6 +272,17 @@ class ZIOTestCase(unittest.TestCase):
             min_len = min(len(some) - 2, 300)
             self.assertEqual(some[:min_len], s[700:700+min_len])
 
+    def test_read_timeout(self):
+        for io in exec_cmdline('cat', timeout=1):
+
+            self.assertRaises(TimeoutError, io.read_until,  b'____')
+
+            self.assertRaises(TimeoutError, io.read, )
+
+            self.assertRaises(TimeoutError, io.read_some, )
+
+            self.assertRaises(TimeoutError, io.read_line, )
+
     def test_get_pass(self):
         # here we have to use TTY, or password won't get write thru
         # if you use subprocess, you will encounter same effect 
