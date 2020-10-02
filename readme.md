@@ -12,11 +12,14 @@ The following code illustrate the basic idea.
 ```python
 from zio import *
 
+debug_local = True
+
 if debug_local:
     io = zio('./buggy-server')            # used for local pwning development
 else:
     io = zio(('1.2.3.4', 1337))           # used to exploit remote service
 
+io.read_until(b'Welcome Banner')
 io.write(your_awesome_ropchain_or_shellcode)
 # hey, we got an interactive shell!
 io.interact()
@@ -28,6 +31,8 @@ io.interact()
  - Support both python2 and python3, no need to worry about the python version installed on some weired jump server provided by unknown.
  - Easy to learn and use.
 
+If you want advanced features such as ELF parsing and more, try [pwntools](https://github.com/Gallopsled/pwntools).
+
 ## License
 
 [zio] use [SATA License](LICENSE.txt) (Star And Thank Author License), so you have to star this project before using. Read the [license](LICENSE.txt) carefully.
@@ -35,7 +40,7 @@ io.interact()
 ## Working Environment
 
  - Linux or OSX
- - Python 2.6, 2.7, 3
+ - Python 2.6, 2.7, 3.x
 
 for windows support, a minimal version(socket-io only) [mini_zio](./mini_zio.py) is provided.
 
@@ -53,14 +58,19 @@ $ pip install zio
  
 ```python
 from zio import *
-io = zio('./buggy-server')
-# io = zio((pwn.server, 1337))
+
+debug_local = True
+
+if debug_local:
+    io = zio('./buggy-server')
+else:
+    io = zio((pwn.server, 1337))
 
 for i in range(1337):
-    io.writeline('add ' + str(i))
-    io.read_until('>>')
+    io.writeline(b'add ' + str(i))
+    io.read_until(b'>>')
 
-io.write(b"add TFpdp1gL4Qu4aVCHUF6AY5Gs7WKCoTYzPv49QSa\ninfo " + "A" * 49 + "\nshow\n")
+io.write(b"add TFpdp1gL4Qu4aVCHUF6AY5Gs7WKCoTYzPv49QSa\ninfo " + b"A" * 49 + b"\nshow\n")
 io.read_until(b'A' * 49)
 libc_base = l32(io.read(4)) - 0x1a9960
 libc_system = libc_base + 0x3ea70

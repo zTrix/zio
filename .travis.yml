@@ -57,5 +57,7 @@ jobs:
         homebrew:
           packages:
             - socat
+      before_install:
+        - "/usr/local/bin/brew install socat"
       script: 
         - ./test2/test.sh
