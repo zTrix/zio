@@ -1246,7 +1246,7 @@ class ProcessIO:
             if self.wfd in r:
                 try:
                     data = os.read(self.wfd, size)
-                    write_debug(self.debug, b'ProcessIO.recv(%r)[wfd=%s] -> %r' % (size, self.wfd, data))
+                    write_debug(self.debug, b'ProcessIO.recv(%r)[wfd=%r] -> %r' % (size, self.wfd, data))
                     if data:
                         return data
                 except OSError as err:
