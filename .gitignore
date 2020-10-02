@@ -2,3 +2,4 @@
 dist
 build
 zio.egg-info
+.vscode

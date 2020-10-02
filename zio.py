@@ -1,8 +1,8 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 #===============================================================================
 # The Star And Thank Author License (SATA)
 # 
-# Copyright (c) 2014 zTrix(i@ztrix.me)
+# Copyright (c) 2020 zTrix(i@ztrix.me)
 # 
 # Project Url: https://github.com/zTrix/zio
 # 
@@ -40,28 +40,65 @@
 #===============================================================================
 
 from __future__ import print_function
-__version__ = "1.0.3"
+from __future__ import division
+
+__version__ = "2.0.0"
 __project__ = "https://github.com/zTrix/zio"
 
-import struct, socket, os, sys, subprocess, threading, pty, time, re, select, termios, resource, tty, errno, signal, fcntl, gc, platform, datetime, inspect, atexit
-try:
-    from io import StringIO
-except ImportError:
-    from StringIO import StringIO
+import os
+import sys
+import re
+import struct
+import functools
+import socket
+import signal
+import ast
+import time
+import datetime
+import errno
+import select
+import binascii
+import tempfile
+# for ProcessIO below
+import pty
+import shlex
+import fcntl
+import gc
+import atexit
+import resource
+import termios
+import tty
+# works for python2.6 python2.7 and python3
+from distutils.spawn import find_executable
+
+# we want to keep zio as a zero-dependency single-file easy-to-use library, and even more, work across python2/python3 boundary
+# https://python-future.org/compatible_idioms.html#unicode-text-string-literals
+
+python_version_major = sys.version_info[0]      # do not use sys.version_info.major which is not available in python2.6
+
+# python2 python3 shim
+if python_version_major < 3:
+    input = raw_input           # pylint: disable=undefined-variable
+else:
+    unicode = str
+    unichr = chr
 
 try:
-    from termcolor import colored
-except:
-    # if termcolor import failed, use the following v1.1.0 source code of termcolor here
+    from io import BytesIO
+except ImportError:
+    from StringIO import StringIO as BytesIO
+
+if True:
+    # termcolor handled using bytes instead of unicode
     # since termcolor use MIT license, SATA license above should be OK
     ATTRIBUTES = dict( list(zip([ 'bold', 'dark', '', 'underline', 'blink', '', 'reverse', 'concealed' ], list(range(1, 9)))))
     del ATTRIBUTES['']
     HIGHLIGHTS = dict( list(zip([ 'on_grey', 'on_red', 'on_green', 'on_yellow', 'on_blue', 'on_magenta', 'on_cyan', 'on_white' ], list(range(40, 48)))))
     COLORS = dict(list(zip(['grey', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white', ], list(range(30, 38)))))
-    RESET = '\033[0m'
+    RESET = b'\033[0m'
 
     def colored(text, color=None, on_color=None, attrs=None):
-        fmt_str = '\033[%dm%s'
+        fmt_str = b'\033[%dm%s'
         if color is not None: text = fmt_str % (COLORS[color], text)
         if on_color is not None: text = fmt_str % (HIGHLIGHTS[on_color], text)
         if attrs is not None:
@@ -71,233 +108,973 @@ except:
         text += RESET
         return text
 
-__all__ = ['stdout', 'log', 'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'zio', 'EOF', 'TIMEOUT', 'SOCKET', 'PROCESS', 'REPR', 'EVAL', 'HEX', 'UNHEX', 'BIN', 'UNBIN', 'RAW', 'NONE', 'COLORED', 'PIPE', 'TTY', 'TTY_RAW', 'cmdline']
+# -------------------------------------------------
+# =====> packing/unpacking related functions <=====
 
-def stdout(s, color = None, on_color = None, attrs = None):
-    if not color:
-        sys.stdout.write(s)
+def convert_packing(endian, bits, arg, autopad=False):
+    """
+    given endian, bits spec, do the following
+        convert between bytes <--> int
+        convert between bytes <--> [int]
+
+    params:
+        endian: < for little endian, > for big endian
+        bits: bit size of packing, valid values are 8, 16, 32, 64
+        arg: integer or bytes
+        autopad: auto pad input string to required length if needed
+    """
+    pfs = {8: 'B', 16: 'H', 32: 'I', 64: 'Q'}
+
+    if isinstance(arg, unicode):
+        arg = arg.encode('latin-1')
+
+    if isinstance(arg, bytearray):
+        arg = bytes(arg)
+
+    if isinstance(arg, bytes):      # bytes -> int or [int]
+        c = bits // 8
+        r = len(arg) % c
+        if r != 0:
+            if autopad:
+                arg = arg[:len(arg) // c * c] + (arg[-r:].ljust(c, b'\x00') if endian == '<' else arg[-r:].rjust(c, b'\x00'))
+            else:
+                raise ValueError('bad input length, expected multiple of %d, got %d. Fix length manually or use autopad=True' % (c, len(arg)))
+        unpacked = struct.unpack(endian + pfs[bits] * (len(arg) // c), arg)
+        return list(unpacked) if len(unpacked) > 1 else unpacked[0]
+    else:                           # int or [int] -> bytes
+        args = list(arg) if isinstance(arg, (list, tuple)) else [arg]
+        return struct.pack(endian + pfs[bits] * len(args), *args)
+
+l8 = functools.partial(convert_packing, '<', 8)
+b8 = functools.partial(convert_packing, '>', 8)
+l16 = functools.partial(convert_packing, '<', 16)
+b16 = functools.partial(convert_packing, '>', 16)
+l32 = functools.partial(convert_packing, '<', 32)
+b32 = functools.partial(convert_packing, '>', 32)
+l64 = functools.partial(convert_packing, '<', 64)
+b64 = functools.partial(convert_packing, '>', 64)
+
+# -------------------------------------------------
+# =====> utility functions <=====
+
+def bytes2hex(s):
+    '''
+    Union{bytes, unicode} -> bytes
+    '''
+    if isinstance(s, unicode):
+        s = s.encode()
+    return binascii.hexlify(s)
+
+def hex2bytes(s, autopad=False):
+    '''
+    bytes -> bytes
+    '''
+    if isinstance(s, unicode):
+        s = s.encode()
+    s = s.strip()
+    if len(s) % 2 == 1:
+        if autopad == 'left' or autopad == True:
+            s = b'0' + s
+        elif autopad == 'right':
+            s = s + b'0'
+        else:
+            raise ValueError('invalid length of hex bytes: %d, should be multiple of 2. Use autopad=True to fix automatically' % len(s))
+    return binascii.unhexlify(s)
+
+tohex = bytes2hex
+unhex = hex2bytes
+
+if python_version_major < 3:
+    def xor(a, b):
+        '''
+        bytes -> bytes -> bytes
+        the first param a must be longer than or equal to the length of the second param
+        '''
+        return b''.join([chr(ord(c) ^ ord(b[i % len(b)])) for i, c in enumerate(a)])
+else:
+    def xor(a, b):
+        '''
+        bytes -> bytes -> bytes
+        the first param a must be longer than or equal to the length of the second param
+        '''
+        return bytes([c ^ b[i % len(b)] for i, c in enumerate(a)])
+
+def is_hostport_tuple(target):
+    return type(target) == tuple and len(target) == 2 and isinstance(target[1], int) and target[1] >= 0 and target[1] < 65536
+
+def match_pattern(pattern, byte_buf):
+    '''
+    pattern -> byte_buf -> index span # (-1, -1) for not found)
+    pattern could be bytes or re objects or lambda function which returns index span
+    '''
+    if isinstance(pattern, bytes):
+        i = byte_buf.find(pattern)
+        if i > -1:
+            return (i, i + len(pattern))
+        else:
+            return (-1, -1)
+    elif hasattr(pattern, 'match') and hasattr(pattern, 'search'):
+        mo = pattern.search(byte_buf)
+        if not mo:
+            return (-1, -1)
+        else:
+            return mo.span()
+    elif callable(pattern):
+        return pattern(byte_buf)
+
+def write_stdout(data):
+    if hasattr(sys.stdout, 'buffer'):
+        sys.stdout.buffer.write(data)
     else:
-        sys.stdout.write(colored(s, color, on_color, attrs))
+        if python_version_major < 3:
+            sys.stdout.write(data)
+        else:
+            sys.stdout.write(data.decode())
     sys.stdout.flush()
 
-def log(s, color = None, on_color = None, attrs = None, new_line = True, timestamp = False, f = sys.stderr):
-    if timestamp is True:
-        now = datetime.datetime.now().strftime('[%Y-%m-%d_%H:%M:%S]')
-    elif timestamp is False:
-        now = None
-    elif timestamp:
-        now = timestamp
-    if not color:
-        s = str(s)
+def write_stderr(data):
+    if hasattr(sys.stderr, 'buffer'):
+        sys.stderr.buffer.write(data)
     else:
-        s = colored(str(s), color, on_color, attrs)
-    if now:
-        f.write(now)
-        f.write(' ')
-    f.write(s)
-    if new_line:
-        f.write('\n')
-    f.flush()
-
-def _lb_wrapper(func):
-    endian = func.__name__[0] == 'l' and '<' or '>'
-    bits = int(func.__name__[1:])
-    pfs = {8: 'B', 16: 'H', 32: 'I', 64: 'Q'}
-    def wrapper(*args):
-        ret = []
-        join = False
-        for i in args:
-            if isinstance(i, int):
-                join = True
-                v = struct.pack(endian + pfs[bits], i % (1 << bits))
-                ret.append(v)
-            else:
-                if not i: 
-                    ret.append(None)
-                else:
-                    v = struct.unpack(endian + pfs[bits] * (len(i) * 8/bits), i)
-                    ret += v
-        if join:
-            return ''.join(ret)
-        elif len(ret) == 1:
-            return ret[0]
-        elif len(ret) == 0:     # all of the input are empty strings
-            return None
+        if python_version_major < 3:
+            sys.stderr.write(data)
         else:
-            return ret
-    wrapper.__name__ = func.__name__
-    return wrapper
+            sys.stderr.write(data.decode())
+    sys.stderr.flush()
 
-@_lb_wrapper
-def l8 (*args): pass
-@_lb_wrapper
-def b8 (*args): pass
-@_lb_wrapper
-def l16(*args): pass
-@_lb_wrapper
-def b16(*args): pass
-@_lb_wrapper
-def l32(*args): pass
-@_lb_wrapper
-def b32(*args): pass
-@_lb_wrapper
-def l64(*args): pass
-@_lb_wrapper
-def b64(*args): pass
+def write_debug(f, data, show_time=True, end=b'\n'):
+    if not f:
+        return
+    if isinstance(data, unicode):
+        data = data.encode('latin-1')
+    if show_time:
+        now = datetime.datetime.now().strftime('[%Y-%m-%d_%H:%M:%S]').encode()
+        f.write(now)
+        f.write(b' ')
+    f.write(data)
+    if end:
+        f.write(end)
+    f.flush()
+    
+# -------------------------------------------------
+# =====> zio class modes and params <=====
 
-class EOF(Exception):
-    """Raised when EOF is read from child or socket.
-    This usually means the child has exited or socket shutdown at remote end"""
-
-class TIMEOUT(Exception):
-    """Raised when a read timeout exceeds the timeout. """
-
-SOCKET = 'socket'       # zio mode socket
-PROCESS = 'process'     # zio mode process
 PIPE = 'pipe'           # io mode (process io): send all characters untouched, but use PIPE, so libc cache may apply
 TTY = 'tty'             # io mode (process io): normal tty behavier, support Ctrl-C to terminate, and auto \r\n to display more readable lines for human
 TTY_RAW = 'ttyraw'      # io mode (process io): send all characters just untouched
 
-def COLORED(f, color = 'cyan', on_color = None, attrs = None): return lambda s : colored(f(s), color, on_color, attrs)
-def REPR(s): return repr(str(s)) + '\r\n'
-def EVAL(s):    # now you are not worried about pwning yourself
+def COLORED(f, color='cyan', on_color=None, attrs=None):
+    return lambda s : colored(f(s), color, on_color, attrs)
+
+# read/write transform functions
+# bytes -> (printable) bytes
+if python_version_major < 3:
+    def REPR(s): return b'b' + repr(s) + b'\r\n'
+else:
+    def REPR(s): return str(s).encode() + b'\r\n'
+
+def EVAL(s):    # now you are not worried about pwning yourself, do not use ast.literal_eval because of 1. encoding issue 2. we only eval string
     st = 0      # 0 for normal, 1 for escape, 2 for \xXX
     ret = []
     i = 0
     while i < len(s):
+        c = s[i:i+1]    # current byte, for python2/3 compatibility
         if st == 0:
-            if s[i] == '\\':
+            if c == b'\\':
                 st = 1
             else:
-                ret.append(s[i])
+                ret.append(c)
         elif st == 1:
-            if s[i] in ('"', "'", "\\", "t", "n", "r"):
-                if s[i] == 't':
-                    ret.append('\t')
-                elif s[i] == 'n':
-                    ret.append('\n')
-                elif s[i] == 'r':
-                    ret.append('\r')
+            if c in (b'"', b"'", b"\\", b"t", b"n", b"r"):
+                if c == b't':
+                    ret.append(b'\t')
+                elif c == b'n':
+                    ret.append(b'\n')
+                elif c == b'r':
+                    ret.append(b'\r')
                 else:
-                    ret.append(s[i])
+                    ret.append(c)
                 st = 0
-            elif s[i] == 'x':
+            elif c == b'x':
                 st = 2
             else:
-                raise Exception('invalid repr of str %s' % s)
+                raise ValueError('invalid repr of str %s' % s)
         else:
             num = int(s[i:i+2], 16)
             assert 0 <= num < 256
-            ret.append(chr(num))
+            if python_version_major < 3:
+                ret.append(chr(num))
+            else:
+                ret.append(bytes([num]))
             st = 0
             i += 1
         i += 1
-    return ''.join(ret)
-def HEX(s): return str(s).encode('hex') + '\r\n'
-def UNHEX(s): s=str(s).strip(); return (len(s) % 2 and '0'+s or s).decode('hex') # hex-strings with odd length are now acceptable
-def BIN(s): return ''.join([format(ord(x),'08b') for x in str(s)]) + '\r\n'
-def UNBIN(s): s=str(s).strip(); return ''.join([chr(int(s[x:x+8],2)) for x in range(0,len(s),8)])
-def RAW(s): return str(s)
-def NONE(s): return ''
+    return b''.join(ret)
 
+def HEX(s): return bytes2hex(s) + b'\r\n'
+TOHEX = HEX
+def UNHEX(s): return hex2bytes(s)
+
+def HEXDUMP(byte_buf, width=16, indent=0):
+    length = len(byte_buf)
+    lines = (length // width) + (length % width != 0)
+    ret = []
+
+    printable_low = b' '
+    printable_high = b'~'
+
+    hexcode_width = 0
+
+    for lino in range(lines):
+        index_begin = lino * width
+        line = byte_buf[index_begin:index_begin+width]
+
+        prefix = format('%08x' % index_begin).encode()
+        hexcode = b''
+        printable = b''
+
+        for gi in range(0, len(line), 2):
+            gd = line[gi:gi+2]
+            hexcode += b' ' + binascii.hexlify(gd)
+            
+            printable += gd[0:1] if printable_low <= gd[0:1] <= printable_high else b'.'
+            if len(gd) == 2:
+                printable += gd[1:2] if printable_low <= gd[1:2] <= printable_high else b'.'
+
+        if len(hexcode) > hexcode_width:
+            hexcode_width = len(hexcode)
+        elif len(hexcode) < hexcode_width:
+            hexcode = hexcode.ljust(hexcode_width, b' ')
+
+        ret.append(b'%s%s:%s  %s\n' % (b' ' * indent, prefix, hexcode, printable))
+    return b''.join(ret)
+
+HEXDUMP_INDENT4 = functools.partial(HEXDUMP, indent=4)
+HEXDUMP_INDENT8 = functools.partial(HEXDUMP, indent=8)
+HEXDUMP_INDENT16 = functools.partial(HEXDUMP, indent=16)
+
+if python_version_major < 3:
+    def BIN(s): return b' '.join([format(ord(x),'08b') for x in str(s)]) + b'\r\n'
+else:
+    def BIN(s): return b' '.join([format(x,'08b').encode() for x in s]) + b'\r\n'
+
+def UNBIN(s, autopad=False):
+    s = bytes(filter(lambda x: x in b'01', s))
+    if len(s) % 8 != 0:
+        extra = 8 - len(s) % 8
+        if autopad == 'left' or autopad == True:
+            s = (b'0' * extra) + s
+        elif autopad == 'right':
+            s = s + (b'0' * extra)
+        else:
+            raise ValueError('invalid length of 01 bytestring: %d, should be multiple of 8. Use autopad=True to fix automatically' % len(s))
+    if python_version_major < 3:
+        return b''.join([chr(int(s[x:x+8],2)) for x in range(0, len(s), 8)])
+    else:
+        return bytes([int(s[x:x+8],2) for x in range(0, len(s), 8)])
+
+def RAW(s): return s
+def NONE(s): return b''
+
+# -------------------------------------------------
+# =====> zio helper functions <=====
+
+def select_ignoring_useless_signal(iwtd, owtd, ewtd, timeout=None):
+    '''This is a wrapper around select.select() that ignores signals. If
+    select.select raises a select.error exception and errno is an EINTR
+    error then it is ignored. Mainly this is used to ignore sigwinch
+    (terminal resize). '''
+
+    # if select() is interrupted by a signal (errno==EINTR) then
+    # we loop back and enter the select() again.
+    if timeout is not None:
+        end_time = time.time() + timeout
+    while True:
+        try:
+            return select.select(iwtd, owtd, ewtd, timeout)
+        except select.error as err:
+            if select.error == OSError:     # python3 style
+                eno = err.errno
+            else:
+                err = sys.exc_info()[1]     # python2 style
+                eno = err[0]
+            if eno == errno.EINTR:
+                # if we loop back we have to subtract the
+                # amount of time we already waited.
+                if timeout is not None:
+                    timeout = end_time - time.time()
+                    if timeout < 0:
+                        return([], [], [])
+            else:
+                # something else caused the select.error, so
+                # this actually is an exception.
+                raise
+
+# zio class here
 class zio(object):
-
-    def __init__(self, target, stdin = PIPE, stdout = TTY_RAW, print_read = RAW, print_write = RAW, timeout = 8, cwd = None, env = None, sighup = signal.SIG_DFL, write_delay = 0.05, ignorecase = False, debug = None):
+    '''
+    zio: unified io interface for both socket io and process io
+    '''
+    
+    def __init__(self, target,
+        # common params
+        timeout=None,
+        logfile=None,
+        print_read=True,
+        print_write=True,
+        debug=None,
+        # ProcessIO params 
+        stdin=PIPE,
+        stdout=TTY_RAW,
+        cwd=None,
+        env=None,
+        sighup=signal.SIG_DFL,
+        write_delay=0.05,
+    ):
         """
         zio is an easy-to-use io library for pwning development, supporting an unified interface for local process pwning and remote tcp socket io
+        note that zio fully operates at bytes level instead of unicode, so remember to use bytes when passing arguments to zio methods
 
         example:
 
-        io = zio(('localhost', 80))
+        io = zio(('localhost', 80), print_read=COLORED(RAW, 'yellow'), print_write=HEX)
         io = zio(socket.create_connection(('127.0.0.1', 80)))
+
         io = zio('ls -l')
         io = zio(['ls', '-l'])
 
         params:
-            print_read = bool, if true, print all the data read from target
-            print_write = bool, if true, print all the data sent out
+            target(required): the target object for zio to operate with, could be socket (addr, port) tuple, or connected socket object, or cmd line for spawning process
+            print_read: bool | [COLORED]{NONE, RAW, REPR, HEX}, if set, transform and print all the data read from target
+            print_write: bool | [COLORED]{NONE, RAW, REPR, HEX}, if set, transform and print all the data sent out
+            timeout: int, the global timeout for this zio object
+            logfile: where to print traffic data in or out from target, default to sys.stderr
+            debug: if set to a file object(must be opened using binary mode), will provide info for debugging zio internal. leave it to None by default.
+            stdin(ProcessIO only): {PIPE, TTY, TTY_RAW} which mode to choose for child process stdin, PIPE is recommended for programming interface, since you will need to take care of tty control chars by hand when call write methods if stdin set to TTY mode.
+            stdout(ProcessIO only): {PIPE, TTY, TTY_RAW} which mode to choose for child process stdout
+            cwd(ProcessIO only): the working directory to spawn child process
+            env(ProcessIO only): env variables for child process
+            write_delay(ProcessIO only): write delay for child process to prevent writing too fast
         """
 
         if not target:
-            raise Exception('cmdline or socket not provided for zio, try zio("ls -l")')
-
-        self.debug = debug
+            raise ValueError('cmdline or socket not provided for zio, try zio("ls -l")')
 
         self.target = target
         self.print_read = print_read
         self.print_write = print_write
+        if logfile is None:
+            self.logfile = sys.stderr
+        else:
+            self.logfile = logfile  # must be opened using 'rb'
+
+        # zio object itself is a buffered reader/writer
+        self.buffer = bytearray()
+
+        self.debug = debug
 
         if isinstance(timeout, int) and timeout > 0:
             self.timeout = timeout
         else:
-            self.timeout = 8
+            self.timeout = 16
 
-        self.wfd = -1          # the fd to write to
-        self.rfd = -1           # the fd to read from
+        if is_hostport_tuple(self.target) or isinstance(self.target, socket.socket):
+            self.io = SocketIO(self.target, timeout=self.timeout, debug=debug)
+        else:
+            self.io = ProcessIO(self.target, timeout=self.timeout, debug=debug,
+                stdin=stdin,
+                stdout=stdout,
+                cwd=cwd,
+                env=env,
+                sighup=sighup,
+                write_delay=write_delay,
+                )
 
-        self.write_delay = write_delay     # the delay before writing data, pexcept said Linux don't like this to be below 30ms
-        self.close_delay = 0.1      # like pexcept, will used by close(), to give kernel time to update process status, time in seconds
-        self.terminate_delay = 0.1  # like close_delay
-        self.cwd = cwd
-        self.env = env
-        self.sighup = sighup
+    def log_read(self, byte_buf):
+        '''
+        bytes -> IO bytes
+        '''
+        if self.print_read and byte_buf:
+            content = self.read_transform(byte_buf)
+            if hasattr(self.logfile, 'buffer'):
+                self.logfile.buffer.write(content)
+            else:
+                self.logfile.write(content)
+            self.logfile.flush()
 
-        self.flag_eof = False
-        self.closed = True
+    def log_write(self, byte_buf):
+        '''
+        bytes -> IO bytes
+        '''
+        if self.print_write and byte_buf:
+            content = self.write_transform(byte_buf)
+            if hasattr(self.logfile, 'buffer'):
+                self.logfile.buffer.write(content)
+            else:
+                self.logfile.write(content)
+            self.logfile.flush()
+
+    @property
+    def print_read(self):
+        return self.read_transform is not None and self.read_transform is not NONE
+
+    @print_read.setter
+    def print_read(self, value):
+        if value == True:
+            self.read_transform = RAW
+        elif value == False:
+            self.read_transform = NONE
+        elif callable(value):
+            self.read_transform = value
+        else:
+            raise ValueError('bad print_read value')
+        
+        assert callable(self.read_transform)
+
+    @property
+    def print_write(self):
+        return self.write_transform is not None and self.write_transform is not NONE
+
+    @print_write.setter
+    def print_write(self, value):
+        if value == True:
+            self.write_transform = RAW
+        elif value == False:
+            self.write_transform = NONE
+        elif callable(value):
+            self.write_transform = value
+        else:
+            raise ValueError('bad print_read value')
+        
+        assert callable(self.write_transform)
+
+    def read(self, size=None):
+        '''
+        if size is -1 or None, then read all bytes available until EOF
+        if size is a positive integer, read exactly `size` bytes and return
+        raise EOFError if EOF occurred before full size read
+        '''
+        is_read_all = size is None or size < 0
+        while True:
+            if is_read_all or len(self.buffer) < size:
+                incoming = self.io.recv(1536)
+                if incoming is None:
+                    if is_read_all:
+                        ret = bytes(self.buffer)
+                        # self.buffer.clear()   # note: python2 does not support bytearray.clear()
+                        self.buffer = bytearray()
+                        self.log_read(ret)
+                        return ret
+                    else:
+                        raise EOFError('EOF occured before full size read, buffer = %s' % self.buffer)
+                self.buffer.extend(incoming)
+
+            if not is_read_all and len(self.buffer) >= size:
+                ret = bytes(self.buffer[:size])
+                self.buffer = self.buffer[size:]
+                self.log_read(ret)
+                return ret
+
+    read_exact = read
+
+    def read_to_end(self):
+        '''
+        read all data until EOF
+        '''
+        return self.read(size=-1)
+
+    read_all = read_to_end
+    recvall = read_to_end
+
+    def read_line(self, keep=True):
+        content = self.read_until(b'\n', keep=True)
+        if not keep:
+            content = content.rstrip(b'\r\n')
+        return content
+
+    readline = read_line
+    recvline = read_line    # for pwntools compatibility
+
+    def read_until(self, pattern, keep=True):
+        '''
+        read until some bytes pattern found
+        patter could be one of following:
+        1. bytes
+        2. re object(must compile using bytes rather than unicode, e.g: re.compile(b"something"))
+        3. callable functions return True for found and False for not found
+        4. lists of things above
+
+        raise EOFError if EOF occurred before pattern found
+        '''
+
+        if not isinstance(pattern, (list, tuple)):
+            pattern_list = [pattern]
+        else:
+            pattern_list = pattern
+
+        while True:
+            for p in pattern_list:
+                span = match_pattern(p, self.buffer)
+                if span[0] > -1: # found
+                    ret = self.buffer[:span[1]] if keep == True else self.buffer[:span[0]]
+                    self.log_read(bytes(self.buffer[:span[1]]))
+                    self.buffer = self.buffer[span[1]:]
+                    return bytes(ret)
+
+            incoming = self.io.recv(1536)
+            if incoming is None:
+                raise EOFError('EOF occured before pattern match, buffer = %s' % self.buffer)
+
+            self.buffer.extend(incoming)
+
+    readuntil = read_until
+    recv_until = read_until
+    recvuntil = read_until
+
+    def read_some(self, size=None):
+        '''
+        just read 1 or more available bytes (less than size) and return
+        '''
+        if len(self.buffer):
+            ret = bytes(self.buffer)
+            self.buffer = bytearray()
+            self.log_read(ret)
+            return ret
+
+        ret = self.io.recv(size)
+        self.log_read(ret)
+        return ret
+
+    recv = read_some
+
+    def read_until_timeout(self, timeout=1):
+        '''
+        read for some timeout, return current buffer plus whatever read
+        '''
+        end_time = time.time() + timeout
+
+        while True:
+            r, _w, _e = select_ignoring_useless_signal([self.io.rfd], [], [], timeout)
+            data = None
+            if self.io.rfd in r:
+                data = self.io.recv(1536)
+                if data is None:
+                    break
+                elif data:
+                    self.buffer.extend(data)
+                    break
+
+            timeout = end_time - time.time()
+            if timeout < 0:
+                break
+
+        if len(self.buffer):
+            ret = bytes(self.buffer)
+            self.log_read(ret)
+            self.buffer = bytearray()
+            return ret
+        return b''
+
+    read_eager = read_until_timeout
+
+    def readable(self):
+        '''
+        tell wether we have some data to read
+        '''
+        return select_ignoring_useless_signal([self.io.rfd], [], [], 0) == ([self.io.rfd], [], [])
+
+    def write(self, byte_buf):
+        '''
+        write/sendall bytes and flush them all
+        '''
+        if not byte_buf:
+            return 0
+        if isinstance(byte_buf, unicode):
+            byte_buf = byte_buf.encode('latin-1')   # will raise UnicodeEncodeError if code point larger than 255
+        self.log_write(bytes(byte_buf))
+        self.io.send(byte_buf)
+        return len(byte_buf)
+
+    send = write    # for pwntools compatibility
+    sendall = write # for socket compatibility
+
+    def write_line(self, byte_buf):
+        '''
+        write byte_buf and a linesep
+        '''
+        if isinstance(byte_buf, unicode):
+            byte_buf = byte_buf.encode('latin-1')   # will raise UnicodeEncodeError if code point larger than 255
+        return self.write(byte_buf + os.linesep.encode())
+
+    sendline = write_line
+    send_line = write_line
+    writeline = write_line
+
+    def write_lines(self, sequence):
+        n = 0
+        for s in sequence:
+            n += self.write_line(s)
+        return n
+
+    writelines = write_lines
+
+    def write_after(self, pattern, byte_buf):
+        self.read_until(pattern)
+        self.write(byte_buf)
+
+    writeafter = write_after
+    sendafter = write_after
+
+    def write_line_after(self, pattern, byte_buf):
+        self.read_until(pattern)
+        self.writeline(byte_buf)
+
+    writeline_after = write_line_after  # for human mistake
+    sendline_after = write_line_after   # for human mistake
+    sendlineafter = write_line_after    # for pwntools compatibility
+
+    def send_eof(self):
+        '''
+        notify peer that we have done writing
+        '''
+        self.io.send_eof()
+
+    sendeof = send_eof
+    end = send_eof      # for zio 1.0 compatibility
+
+    def interact(self, read_transform=None, write_transform=None, show_input=None, show_output=None):
+        '''
+        interact with current tty stdin/stdout
+        '''
+        self.io.interact(read_transform=read_transform, write_transform=write_transform, show_input=show_input, show_output=show_output)
+
+    interactive = interact      # for pwntools compatibility
+
+    def close(self):
+        '''
+        close underlying io and free all resources
+        '''
+        self.io.close()
+
+    def is_closed(self):
+        '''
+        tell whether this zio object is closed
+        '''
+        return self.io.is_closed()
+
+    def is_eof_seen(self):
+        '''
+        tell whether we have received EOF from peer end
+        '''
+        return self.io.eof_seen
+
+    def is_eof_sent(self):
+        '''
+        tell whether we have sent EOF to the peer 
+        '''
+        return self.io.eof_sent
+
+    def flush(self):
+        '''
+        kept to act like a file-like object
+        '''
+        pass
+
+    def fileno(self):
+        '''
+        return underlying os fileno, act like a file-like object
+        '''
+        return self.io.rfd
+
+    def mode(self):
+        return self.io.mode
+
+    def exit_status(self):
+        return self.io.exit_status
+
+    exit_code = exit_status
+
+    def gdb_hint(self, userscript=None, breakpoints=None):
+        '''
+        script: str
+        breakpoints: List[Union{int, (int, keyword:str)}], example: [0x400419, (0x1009, 'libc.so')]
+        '''
+        pid = self.io.target_pid()
+        if not pid:
+            input('unable to find target pid to attach gdb')
+            return
+        
+        gdb_cmd = ['attach %d' % pid, 'set disassembly-flavor intel']
+
+        vmmap = open('/proc/%d/maps' % pid).read()
+        vmmap_lines = vmmap.splitlines()
+
+        if breakpoints:
+            for b in breakpoints:
+                if isinstance(b, (tuple, list)):
+                    found = False
+                    for line in vmmap_lines:
+                        if b[1].lower() in line.lower():
+                            base = int(line.split('-')[0], 16)
+                            gdb_cmd.append('b *' + hex(base + b[0]))
+                            found = True
+                            break
+                    if not found:
+                        print('[ WARN ] keyword not found for breakpoint base address: %r' % b)
+                elif isinstance(b, int):
+                    gdb_cmd.append('b *' + hex(b))
+                elif isinstance(b, type('')):
+                    gdb_cmd.append('b *' + b)
+                else:
+                    print('[ WARN ] bad breakpoint: %r' % b)
+
+        if not userscript:
+            userscript = ''
+        if isinstance(userscript, bytes):
+            userscript = userscript.decode('utf-8')
+
+        gdb_script = '\n'.join(gdb_cmd) + '\n\n' + userscript + '\n'
+
+        tf = tempfile.NamedTemporaryFile(mode="w", suffix='.zio.gdbx')
+        tf.write(gdb_script)
+        tf.flush()
+
+        hint = "gdb -x %s" % tf.name
+        hint += '\nuse cmdline above to attach gdb then press enter to continue ... '
+        input(hint)
+
+    def __str__(self):
+        return '<zio target=%s, timeout=%s, io=%s, buffer=%s>' % (self.target, self.timeout, str(self.io), self.buffer)
+
+class SocketIO:
+    mode = 'socket'
+
+    def __init__(self, target, timeout=None, debug=None):
+        self.timeout = timeout
+        self.debug = debug
+
+        if isinstance(target, socket.socket):
+            self.sock = target
+        else:
+            self.sock = socket.create_connection(target, self.timeout)
+
+        self.eof_seen = False
+        self.eof_sent = False
         self.exit_code = None
 
-        self.ignorecase = ignorecase
+    @property
+    def rfd(self):
+        return self.sock.fileno()
 
-        self.buffer = str()
+    @property
+    def wfd(self):
+        return self.sock.fileno()
 
-        if self.mode() == SOCKET:
-            if isinstance(self.target, socket.socket):
-                self.sock = self.target
-                self.name = repr(self.target)
-            else:
-                self.sock = socket.create_connection(self.target, self.timeout)
-                self.name = '<socket ' + self.target[0] + ':' + str(self.target[1]) + '>'
-            self.rfd = self.wfd = self.sock.fileno()
-            self.closed = False
-            return
+    def recv(self, size=None):
+        '''
+        recv 1 or more available bytes then return
+        return None to indicate EOF
+        since we use b'' to indicate empty string in case of timeout, so do not return b'' for EOF
+        '''
+        if size is None:    # socket.recv does not allow None or -1 as argument
+            size = 8192
+        try:
+            b = self.sock.recv(size)
+            if not b:
+                self.eof_seen = True
+                return None
+            return b
+        except Exception as ex:
+            self.exit_code = 1    # recv exception
+            write_debug(self.debug, b'SocketIO recv exception: %r\n' % ex)
+            raise
 
-        if "windows" in platform.system().lower():
-            raise Exception("zio (version %s) process mode is currently only supported on linux and osx." % __version__)
+    def send(self, buf):
+        try:
+            return self.sock.sendall(buf)
+        except Exception as ex:
+            self.exit_code = 2    # send exception
+            write_debug(self.debug, b'SocketIO send exception: %r\n' % ex)
+            raise
 
-        # spawn process below
+    def send_eof(self):
+        self.eof_sent = True
+        self.sock.shutdown(socket.SHUT_WR)
+
+    def interact(self, read_transform=None, write_transform=None, show_input=None, show_output=None):
+        if show_input is None:
+            show_input = not os.isatty(pty.STDIN_FILENO)    # if pty, itself will echo; if pipe, we do echo
+        if show_output is None:
+            show_output = True
+        while not self.is_closed():
+            try:
+                r, _w, _e = select_ignoring_useless_signal([self.rfd, pty.STDIN_FILENO], [], [])
+            except KeyboardInterrupt:
+                break
+            data = None
+            if self.rfd in r:
+                data = self.recv(1024)
+                if data:
+                    if read_transform is not None:
+                        data = read_transform(data)
+                    if show_output:
+                        write_stdout(data)
+                else:       # EOF
+                    self.eof_seen = True
+                    break
+            if pty.STDIN_FILENO in r:
+                try:
+                    data = os.read(pty.STDIN_FILENO, 1024)
+                except OSError as e:
+                    # the subprocess may have closed before we get to reading it
+                    if e.errno != errno.EIO:
+                        raise
+                if data:
+                    if write_transform:
+                        data = write_transform(data)
+                    if show_input:
+                        write_stdout(data)
+                    self.send(data)
+
+    def close(self):
+        self.eof_seen = True
+        self.eof_sent = True
+        try:
+            self.sock.close()
+            if self.exit_code is None:
+                self.exit_code = 0
+        except Exception as ex:
+            self.exit_code = 3    # close exception
+            write_debug(self.debug, b'SocketIO close exception: %r\n' % ex)
+            raise
+
+    def is_closed(self):
+        if python_version_major < 3:
+            return isinstance(self.sock._sock, socket._closedsocket)    # pylint: disable=no-member
+        else:
+            return self.sock._closed
+
+    @property
+    def exit_status(self):
+        return self.exit_code
+
+    def target_pid(self):       # code borrowed from https://github.com/Gallopsled/pwntools to implement gdb attach of local socket
+        all_pids = [int(pid) for pid in os.listdir('/proc') if pid.isdigit()]
+
+        def getpid(loc, rem):
+            loc = b'%08X:%04X' % (l32(socket.inet_aton(loc[0])), loc[1])
+            rem = b'%08X:%04X' % (l32(socket.inet_aton(rem[0])), rem[1])
+            inode = None
+            with open('/proc/net/tcp', 'rb') as fd:
+                for line in fd:
+                    line = line.split()
+                    if line[1] == loc and line[2] == rem:
+                        inode = line[9]
+            if inode == None:
+                return None
+            for pid in all_pids:
+                try:
+                    for fd in os.listdir('/proc/%d/fd' % pid):
+                        fd = os.readlink('/proc/%d/fd/%s' % (pid, fd))
+                        m = re.match(r'socket:\[(\d+)\]', fd)
+                        if m:
+                            this_inode = m.group(1)
+                            if this_inode.encode() == inode:
+                                return pid
+                except:
+                    pass
+
+        # Specifically check for socat, since it has an intermediary process
+        # if you do not specify "nofork" to the EXEC: argument
+        # python(2640) -- socat(2642) -- socat(2643) -- bash(2644)
+        def fix_socat(pid):
+            if not pid:
+                return None
+            exe_path = os.readlink('/proc/%d/exe' % pid)
+            if os.path.basename(exe_path) == 'socat':
+                for p in all_pids:
+                    try:
+                        with open("/proc/%s/stat" % p, 'rb') as f:
+                            data = f.read()
+                            rpar = data.rfind(b')')
+                            dset = data[rpar + 2:].split()
+                            if int(dset[1]) == pid:
+                                return int(data.split()[0])
+                    except:
+                        pass
+            return None
+
+        sock = self.sock.getsockname()
+        peer = self.sock.getpeername()
+
+        pid = getpid(peer, sock)
+        if pid: return fix_socat(pid)
+
+        pid = getpid(sock, peer)
+        return fix_socat(pid)
+
+    def __str__(self):
+        return '<SocketIO ' + 'self.sock=' + repr(self.sock) + '>'
+
+    def __repr__(self):
+        return repr(self.sock)
+
+class ProcessIO:
+    mode = 'process'
+
+    def __init__(self, target, timeout=None, stdin=PIPE, stdout=TTY_RAW, cwd=None, env=None, sighup=None, write_delay=None, debug=None):
+        if os.name == 'nt':
+            raise RuntimeError("zio (version %s) process mode does not support windows operation system." % __version__)
+
+        self.timeout = timeout
+        self.debug = debug
+
+        self.write_delay = write_delay  # the delay before writing data, pexcept said Linux don't like this to be below 30ms
+        self.close_delay = 0.1          # like pexcept, will used by close(), to give kernel time to update process status, time in seconds
+        self.terminate_delay = 0.1      # like close_delay
+
+        self.exit_code = None
         self.pid = None
 
-        self.closed = False
+        self.eof_seen = False
+        self.eof_sent = False
 
+        # STEP 1: prepare command line args
         if isinstance(target, type('')):
-            self.args = split_command_line(target)
-            self.command = self.args[0]
+            self.args = shlex.split(target)
         else:
-            self.args = target
-            self.command = self.args[0]
+            self.args = list(target)
 
-        command_with_path = which(self.command)
-        if command_with_path is None:
-            raise Exception('zio (process mode) Command not found in path: %s' % self.command)
+        executable = find_executable(self.args[0])
+        if not executable:
+            raise ValueError('unable to find executable in path: %s' % self.args)
 
-        self.command = command_with_path
-        self.args[0] = self.command
-        self.name = '<' + ' '.join(self.args) + '>'
+        if not os.access(executable, os.X_OK):
+            raise RuntimeError('could not execute file without X bit set, please chmod +x %s' % executable)
 
-        assert self.pid is None, 'pid must be None, to prevent double spawn'
-        assert self.command is not None, 'The command to be spawn must not be None'
+        self.args[0] = executable
 
-        if stdout == PIPE: stdout_slave_fd, stdout_master_fd = self.pipe_cloexec()
-        else: stdout_master_fd, stdout_slave_fd = pty.openpty()
-        if stdout_master_fd < 0 or stdout_slave_fd < 0: raise Exception('Could not create pipe or openpty for stdout/stderr')
+        # STEP 2: create pipes
+        if stdout == PIPE:
+            stdout_slave_fd, stdout_master_fd = self._pipe_cloexec()    # note: slave, master
+        else:
+            stdout_master_fd, stdout_slave_fd = pty.openpty()           # note: master, slave
+
+        if stdout_master_fd < 0 or stdout_slave_fd < 0:
+            raise RuntimeError('Could not create pipe or openpty for stdout/stderr')
 
         # use another pty for stdin because we don't want our input to be echoed back in stdout
         # set echo off does not help because in application like ssh, when you input the password
         # echo will be switched on again
-        # and dont use os.pipe either, because many thing weired will happen, such as baskspace not working, ssh lftp command hang
+        # and dont use os.pipe either, because many thing weired will happen, such as backspace not working, ssh lftp command hang
 
-        stdin_master_fd, stdin_slave_fd = stdin == PIPE and self.pipe_cloexec() or pty.openpty()
-        if stdin_master_fd < 0 or stdin_slave_fd < 0: raise Exception('Could not openpty for stdin')
+        stdin_master_fd, stdin_slave_fd = self._pipe_cloexec() if stdin == PIPE else pty.openpty()
+        # write_debug(self.debug, b'stdin == %r, stdin_master_fd isatty = %r' % (stdin, os.isatty(stdin_master_fd)))
+
+        if stdin_master_fd < 0 or stdin_slave_fd < 0:
+            raise RuntimeError('Could not openpty for stdin')
+
+        # STEP 3: fork and start engine
 
         gc_enabled = gc.isenabled()
         # Disable gc to avoid bug where gc -> file_dealloc ->
@@ -311,7 +1088,7 @@ class zio(object):
             raise
 
         if self.pid < 0:
-            raise Exception('failed to fork')
+            raise RuntimeError('failed to fork')
         elif self.pid == 0:     # Child
             os.close(stdout_master_fd)
 
@@ -321,10 +1098,10 @@ class zio(object):
 
             try:
                 if os.isatty(stdout_slave_fd) and os.isatty(pty.STDIN_FILENO):
-                    h, w = self.getwinsize(0)
-                    self.setwinsize(stdout_slave_fd, h, w)     # note that this may not be successful
+                    h, w = self._getwinsize(pty.STDIN_FILENO)
+                    self._setwinsize(stdout_slave_fd, h, w)     # note that this may not be successful
             except BaseException as ex:
-                if self.debug: log('[ WARN ] setwinsize exception: %s' % (str(ex)), f = self.debug)
+                write_debug(self.debug, b'[ WARN ][ProcessIO.__init__] setwinsize exception: %r\n' % ex)
 
             # Dup fds for child
             def _dup2(a, b):
@@ -355,17 +1132,17 @@ class zio(object):
             os.closerange(3, max_fd)
 
             # the following line matters, for example, if SIG_DFL specified and sighup sent when exit, the exitcode of child process can be affected to 1
-            if self.sighup is not None:
+            if sighup is not None:
                 # note that, self.signal could only be one of (SIG_IGN, SIG_DFL)
-                signal.signal(signal.SIGHUP, self.sighup)
+                signal.signal(signal.SIGHUP, sighup)
 
-            if self.cwd is not None:
-                os.chdir(self.cwd)
+            if cwd is not None:
+                os.chdir(cwd)
             
-            if self.env is None:
-                os.execv(self.command, self.args)
+            if env is None:
+                os.execv(executable, self.args)
             else:
-                os.execvpe(self.command, self.args, self.env)
+                os.execvpe(executable, self.args, env)
 
             # TODO: add subprocess errpipe to detect child error
             # child exit here, the same as subprocess module do
@@ -381,7 +1158,7 @@ class zio(object):
                 # so we have to set raw mode here now
                 self._wfd_init_mode = tty.tcgetattr(self.wfd)[:]
                 if stdin == TTY_RAW:
-                    self.ttyraw(self.wfd)
+                    self._ttyraw(self.wfd)
                     self._wfd_raw_mode = tty.tcgetattr(self.wfd)[:]
                 else:
                     self._wfd_raw_mode = self._wfd_init_mode[:]
@@ -389,9 +1166,9 @@ class zio(object):
             if os.isatty(self.rfd):
                 self._rfd_init_mode = tty.tcgetattr(self.rfd)[:]
                 if stdout == TTY_RAW:
-                    self.ttyraw(self.rfd, raw_in = False, raw_out = True)
+                    self._ttyraw(self.rfd, raw_in = False, raw_out = True)
                     self._rfd_raw_mode = tty.tcgetattr(self.rfd)[:]
-                    if self.debug: log('stdout tty raw mode: %r' % self._rfd_raw_mode, f = self.debug)
+                    write_debug(self.debug, b'stdout tty raw mode: %r\n' % self._rfd_raw_mode)
                 else:
                     self._rfd_raw_mode = self._rfd_init_mode[:]
 
@@ -402,41 +1179,383 @@ class zio(object):
 
             time.sleep(self.close_delay)
 
-            atexit.register(self.kill, signal.SIGHUP)
+            atexit.register(self._kill, signal.SIGHUP)
+
+    def recv(self, size=None):
+        '''
+        recv 1 or more available bytes then return
+        return None to indicate EOF
+        since we use b'' to indicate empty string in case of timeout, so do not return b'' for EOF
+        '''
+        if size is None:    # os.read does not allow None or -1 as argument
+            size = 8192
+        try:
+            b = os.read(self.rfd, size)
+            # https://docs.python.org/3/library/os.html#os.read
+            # If the end of the file referred to by fd has been reached, an empty bytes object is returned.
+            if not b:                       # BSD style
+                self.eof_seen = True
+                return None
+            return b
+        except OSError as err:
+            if err.errno in (errno.EIO, errno.EBADF):      # Linux does this
+                # EIO:   OSError: [Errno 5] Input/Output Error
+                # EBADF: OSError: [Errno 9] Bad file descriptor
+                self.eof_seen = True
+                return None
+            raise
+
+    def send(self, buf, delay=True):
+        if delay:       # prevent write too fast
+            time.sleep(self.write_delay)
+        return os.write(self.wfd, buf)
+
+    def send_eof(self, force_close=False):
+        self.eof_sent = True
+
+        if not os.isatty(self.wfd):     # pipes can be closed harmlessly
+            os.close(self.wfd)
+
+        # for pty, close master fd in Mac won't cause slave fd input/output error, so let's do it!
+        elif sys.platform.startswith('darwin'):
+            os.close(self.wfd)
+        else:       # assume Linux here
+            # according to http://linux.die.net/man/3/cfmakeraw
+            # set min = 0 and time > 0, will cause read timeout and return 0 to indicate EOF
+            # but the tricky thing here is, if child read is invoked before this
+            # it will still block forever, so you have to call send_eof before that happens
+            mode = tty.tcgetattr(self.wfd)[:]
+            mode[tty.CC][tty.VMIN] = 0
+            mode[tty.CC][tty.VTIME] = 1
+            tty.tcsetattr(self.wfd, tty.TCSAFLUSH, mode)
+            if force_close:
+                time.sleep(self.close_delay)
+                os.close(self.wfd)  # might cause EIO (input/output error)! use force_close at your own risk
+
+    def interact(self, read_transform=None, write_transform=None, show_input=None, show_output=None):
+        """
+        when stdin is passed using os.pipe, backspace key will not work as expected,
+        if wfd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so you should choose the right input when using zio
+        """
+        if show_output is None:
+            show_output = True
+
+        # if stdin is in TTY/TTY_RAW, we passthrough to let the inner tty handle everything
+        # if wfd is a pipe, we keep parent tty in cooked mode, so line editing still works
+        parent_tty_mode = None
+        if os.isatty(pty.STDIN_FILENO) and os.isatty(self.wfd):
+            parent_tty_mode = tty.tcgetattr(pty.STDIN_FILENO)   # save mode and restore after interact
+            self._ttyraw(pty.STDIN_FILENO)                      # set to raw mode to pass all input thru, supporting apps as vim
+            write_debug(self.debug, b'parent tty set to raw mode')
+
+            if show_input is None:
+                show_input = True       # do echo from underlying echo back
+        else:
+            if show_input is None:
+                show_input = False      # parent tty in cooked mode and itself has echo back
+
+        if os.isatty(self.wfd):
+            # here, enable cooked mode for process stdin
+            # but we should only enable for those who need cooked mode, not stuff like vim
+            # we just do a simple detection here
+            wfd_mode = tty.tcgetattr(self.wfd)
+
+            write_debug(self.debug, b'wfd now mode = %r\n' % wfd_mode)
+            write_debug(self.debug, b'wfd raw mode = %r\n' % self._wfd_raw_mode)
+            write_debug(self.debug, b'wfd ini mode = %r\n' % self._wfd_init_mode)
+
+            if wfd_mode == self._wfd_raw_mode:     # if untouched by forked child
+                tty.tcsetattr(self.wfd, tty.TCSAFLUSH, self._wfd_init_mode)
+                write_debug(self.debug, b'change wfd back to init mode\n')
+            # but wait, things here are far more complex than that
+            # most applications set mode not by setting it to some value, but by flipping some bits in the flags
+            # so, if we set wfd raw mode at the beginning, we are unable to set the correct mode here
+            # to solve this situation, set stdin = TTY_RAW, but note that you will need to manually escape control characters by prefixing Ctrl-V
+
+        try:
+            rfdlist = [self.rfd, pty.STDIN_FILENO]
+            if os.isatty(self.wfd):
+                # wfd for tty echo
+                rfdlist.append(self.wfd)
+            while self._isalive():
+                if len(rfdlist) == 0:
+                    break
+                if self.rfd not in rfdlist:
+                    break
+                try:
+                    r, _w, _e = select_ignoring_useless_signal(rfdlist, [], [])
+                except KeyboardInterrupt:
+                    break
+
+                if self.wfd in r:          # handle tty echo back first if wfd is a tty
+                    try:
+                        data = None
+                        data = os.read(self.wfd, 1024)
+                    except OSError as e:
+                        if e.errno != errno.EIO:
+                            raise
+                    if data:
+                        if show_input:
+                            write_stdout(data)
+                    else:
+                        rfdlist.remove(self.wfd)
+                if self.rfd in r:
+                    try:
+                        data = None
+                        data = os.read(self.rfd, 1024)
+                    except OSError as e:
+                        if e.errno != errno.EIO:
+                            raise
+                    if data:
+                        write_debug(self.debug, b'[ProcessIO.interact] read data = %r' % data)
+                        if read_transform:
+                            data = read_transform(data)
+                        if show_output:
+                            # now we are in interact mode, so users want to see things in real
+                            write_stdout(data)
+                    else:
+                        rfdlist.remove(self.rfd)
+                        self.eof_seen = True
+                if pty.STDIN_FILENO in r:
+                    try:
+                        data = None
+                        data = os.read(pty.STDIN_FILENO, 1024)
+                    except OSError as e:
+                        # the subprocess may have closed before we get to reading it
+                        if e.errno != errno.EIO:
+                            raise
+                    if self.debug and os.isatty(self.wfd):
+                        wfd_mode = tty.tcgetattr(self.wfd)
+                        write_debug(self.debug, b'stdin wfd mode = %r' % wfd_mode)
+                    # in BSD, you can still read '' from rfd, so never use `data is not None` here
+                    if data:
+                        write_debug(self.debug, b'[ProcessIO.interact] write data = %r' % data)
+                        if write_transform:
+                            data = write_transform(data)
+                        if not os.isatty(self.wfd):
+                            if os.isatty(pty.STDIN_FILENO):
+                                data = data.replace(b'\r', b'\n')     # we must do the translation when tty does not help
+                            # also echo back by ourselves, now we are echoing things we input by hand
+                            if show_input:
+                                write_stdout(data)
+                        while data != b'' and self._isalive():
+                            n = self.send(data, delay=False)
+                            data = data[n:]
+                    else:
+                        self.send_eof(force_close=True)
+                        rfdlist.remove(pty.STDIN_FILENO)
+
+            while True:     # read the final buffered output, note that the process probably is not alive, so use while True to read until end (fix pipe stdout interact mode bug)
+                r, _w, _e = select_ignoring_useless_signal([self.rfd], [], [], timeout=self.close_delay)
+                if self.rfd in r:
+                    try:
+                        data = None
+                        data = os.read(self.rfd, 1024)
+                    except OSError as e:
+                        if e.errno != errno.EIO:
+                            raise
+                    # in BSD, you can still read '' from rfd, so never use `data is not None` here
+                    if data:
+                        write_debug(self.debug, b'[ProcessIO.interact] read remaining data = %r' % data)
+                        if read_transform:
+                            data = read_transform(data)
+                        if show_output:
+                            write_stdout(data)
+                    else:
+                        self.eof_seen = True
+                        break
+                else:
+                    break
+        finally:
+            if parent_tty_mode:
+                tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, parent_tty_mode)
+            if os.isatty(self.wfd):
+                self._ttyraw(self.wfd)
+
+    def close(self, force_close=True):
+        '''
+        close and clean up, nothing can and should be done after closing
+        '''
+        if self.is_closed():
+            return
+        try:
+            os.close(self.wfd)
+        except:
+            pass    # may already closed in write_eof
+        os.close(self.rfd)
+        time.sleep(self.close_delay)
+        if self._isalive():
+            if not self._terminate(force_close):
+                raise RuntimeError('Could not terminate child process')
+        self.eof_seen = True
+        self.eof_sent = True
+        self.rfd = -1
+        self.wfd = -1
+
+    def is_closed(self):
+        return self.rfd == -1 and self.wfd == -1 and self.eof_sent == True and self.eof_seen == True
 
     @property
-    def print_read(self):
-        return self._print_read and (self._print_read is not NONE)
+    def exit_status(self):
+        if self.exit_code is None:
+            self._isalive()     # will modify exit_code if not alive
+        return self.exit_code
 
-    @print_read.setter
-    def print_read(self, value):
-        if value is True:
-            self._print_read = RAW
-        elif value is False:
-            self._print_read = NONE
-        elif callable(value):
-            self._print_read = value
+    def target_pid(self):
+        return self.pid
+
+    def __str__(self):
+        return '<ProcessIO cmdline=%s>' % (self.args)
+
+    # ---- internal methods ----
+
+    def _kill(self, sig):
+
+        '''This sends the given signal to the child application. In keeping
+        with UNIX tradition it has a misleading name. It does not necessarily
+        kill the child unless you send the right signal. '''
+
+        # Same as os.kill, but the pid is given for you.
+        if self._isalive() and self.pid > 0:
+            os.kill(self.pid, sig)
+
+    def _terminate(self, force=False):
+
+        '''This forces a child process to terminate. It starts nicely with
+        SIGHUP and SIGINT. If "force" is True then moves onto SIGKILL. This
+        returns True if the child was terminated. This returns False if the
+        child could not be terminated. '''
+
+        if not self._isalive():
+            return True
+        try:
+            self._kill(signal.SIGHUP)
+            time.sleep(self.terminate_delay)
+            if not self._isalive():
+                return True
+            self._kill(signal.SIGCONT)
+            time.sleep(self.terminate_delay)
+            if not self._isalive():
+                return True
+            self._kill(signal.SIGINT)        # SIGTERM is nearly identical to SIGINT
+            time.sleep(self.terminate_delay)
+            if not self._isalive():
+                return True
+            if force:
+                self._kill(signal.SIGKILL)
+                time.sleep(self.terminate_delay)
+                if not self._isalive():
+                    return True
+                else:
+                    return False
+            return False
+        except OSError:
+            # I think there are kernel timing issues that sometimes cause
+            # this to happen. I think isalive() reports True, but the
+            # process is dead to the kernel.
+            # Make one last attempt to see if the kernel is up to date.
+            time.sleep(self.terminate_delay)
+            if not self._isalive():
+                return True
+            else:
+                return False
+
+    def _wait(self):
+
+        '''This waits until the child exits. This is a blocking call. This will
+        not read any data from the child, so this will block forever if the
+        child has unread output and has terminated. In other words, the child
+        may have printed output then called exit(), but, the child is
+        technically still alive until its output is read by the parent. '''
+
+        if self._isalive():
+            _pid, status = os.waitpid(self.pid, 0)
         else:
-            raise Exception('bad print_read value')
+            raise Exception('Cannot wait for dead child process.')
+        self.exit_code = os.WEXITSTATUS(status)
+        if os.WIFEXITED(status):
+            self.exit_code = os.WEXITSTATUS(status)
+        elif os.WIFSIGNALED(status):
+            self.exit_code = os.WTERMSIG(status)
+        elif os.WIFSTOPPED(status):
+            # You can't call wait() on a child process in the stopped state.
+            raise RuntimeError('Called wait() on a stopped child ' +
+                    'process. This is not supported. Is some other ' +
+                    'process attempting job control with our child pid?')
+        return self.exit_code
 
-        assert callable(self._print_read) and len(inspect.getargspec(self._print_read).args) == 1
- 
-    @property
-    def print_write(self):
-        return self._print_write and (self._print_write is not NONE)
+    def _isalive(self):
 
-    @print_write.setter
-    def print_write(self, value):
-        if value is True:
-            self._print_write = RAW
-        elif value is False:
-            self._print_write = NONE
-        elif callable(value):
-            self._print_write = value
+        '''This tests if the child process is running or not. This is
+        non-blocking. If the child was terminated then this will read the
+        exit code or signalstatus of the child. This returns True if the child
+        process appears to be running or False if not. It can take literally
+        SECONDS for Solaris to return the right status. '''
+
+        if self.exit_code is not None:
+            return False
+
+        if self.eof_seen:
+            # This is for Linux, which requires the blocking form
+            # of waitpid to # get status of a defunct process.
+            # This is super-lame. The eof_seen would have been set
+            # in recv(), so this should be safe.
+            waitpid_options = 0
         else:
-            raise Exception('bad print_write value')
+            waitpid_options = os.WNOHANG
 
-        assert callable(self._print_write) and len(inspect.getargspec(self._print_write).args) == 1
+        try:
+            pid, status = os.waitpid(self.pid, waitpid_options)
+        except OSError:
+            err = sys.exc_info()[1]
+            # No child processes
+            if err.errno == errno.ECHILD:
+                raise RuntimeError('isalive() encountered condition ' +
+                        'where "terminated" is 0, but there was no child ' +
+                        'process. Did someone else call waitpid() ' +
+                        'on our process?')
+            else:
+                raise err
+
+        # I have to do this twice for Solaris.
+        # I can't even believe that I figured this out...
+        # If waitpid() returns 0 it means that no child process
+        # wishes to report, and the value of status is undefined.
+        if pid == 0:
+            try:
+                ### os.WNOHANG) # Solaris!
+                pid, status = os.waitpid(self.pid, waitpid_options)
+            except OSError as e:
+                # This should never happen...
+                if e.errno == errno.ECHILD:
+                    raise RuntimeError('isalive() encountered condition ' +
+                            'that should never happen. There was no child ' +
+                            'process. Did someone else call waitpid() ' +
+                            'on our process?')
+                else:
+                    raise
+
+            # If pid is still 0 after two calls to waitpid() then the process
+            # really is alive. This seems to work on all platforms, except for
+            # Irix which seems to require a blocking call on waitpid or select,
+            # so I let read_nonblocking take care of this situation
+            # (unfortunately, this requires waiting through the timeout).
+            if pid == 0:
+                return True
+
+        if pid == 0:
+            return True
+
+        if os.WIFEXITED(status):
+            self.exit_code = os.WEXITSTATUS(status)
+        elif os.WIFSIGNALED(status):
+            self.exit_code = os.WTERMSIG(status)
+        elif os.WIFSTOPPED(status):
+            raise RuntimeError('isalive() encountered condition ' +
+                    'where child process is stopped. This is not ' +
+                    'supported. Is some other process attempting ' +
+                    'job control with our child pid?')
+        return False
 
     def __pty_make_controlling_tty(self, tty_fd):
         '''This makes the pseudo-terminal the controlling tty. This should be
@@ -496,7 +1615,7 @@ class zio(object):
         else:
             fcntl.fcntl(fd, fcntl.F_SETFD, old & ~cloexec_flag)
 
-    def pipe_cloexec(self):
+    def _pipe_cloexec(self):
         """Create a pipe with FDs set CLOEXEC."""
         # Pipes' FDs are set CLOEXEC by default because we don't want them
         # to be inherited by other subprocesses: the CLOEXEC flag is removed
@@ -507,15 +1626,7 @@ class zio(object):
         self._set_cloexec_flag(w)
         return w, r
 
-    def fileno(self):
-        '''This returns the file descriptor of the pty for the child.
-        '''
-        if self.mode() == SOCKET:
-            return self.sock.fileno()
-        else:
-            return self.rfd
-
-    def setwinsize(self, fd, rows, cols):   # from pexpect, thanks!
+    def _setwinsize(self, fd, rows, cols):   # from pexpect, thanks!
 
         '''This sets the terminal window size of the child tty. This will cause
         a SIGWINCH signal to be sent to the child. This does not change the
@@ -539,7 +1650,7 @@ class zio(object):
         s = struct.pack('HHHH', rows, cols, 0, 0)
         fcntl.ioctl(fd, TIOCSWINSZ, s)
 
-    def getwinsize(self, fd):
+    def _getwinsize(self, fd):
 
         '''This returns the terminal window size of the child tty. The return
         value is a tuple of (rows, cols). '''
@@ -549,360 +1660,7 @@ class zio(object):
         x = fcntl.ioctl(fd, TIOCGWINSZ, s)
         return struct.unpack('HHHH', x)[0:2]
 
-    def __str__(self):
-        ret = ['io-mode: %s' % self.mode(),
-               'name: %s' % self.name,
-               'timeout: %f' % self.timeout,
-               'write-fd: %d' % (isinstance(self.wfd, int) and self.wfd or self.fileno()),
-               'read-fd: %d' % (isinstance(self.rfd, int) and self.rfd or self.fileno()),
-               'buffer(last 100 chars): %r' % (self.buffer[-100:]),
-               'eof: %s' % self.flag_eof]
-        if self.mode() == SOCKET:
-            pass
-        elif self.mode() == PROCESS:
-            ret.append('command: %s' % str(self.command))
-            ret.append('args: %r' % (self.args,))
-            ret.append('write-delay: %f' % self.write_delay)
-            ret.append('close-delay: %f' % self.close_delay)
-        return '\n'.join(ret)
-
-    def eof(self):
-
-        '''This returns True if the EOF exception was ever raised.
-        '''
-
-        return self.flag_eof
-
-    def terminate(self, force=False):
-
-        '''This forces a child process to terminate. It starts nicely with
-        SIGHUP and SIGINT. If "force" is True then moves onto SIGKILL. This
-        returns True if the child was terminated. This returns False if the
-        child could not be terminated. '''
-
-        if self.mode() != PROCESS:
-            # should I raise something?
-            return
-
-        if not self.isalive():
-            return True
-        try:
-            self.kill(signal.SIGHUP)
-            time.sleep(self.terminate_delay)
-            if not self.isalive():
-                return True
-            self.kill(signal.SIGCONT)
-            time.sleep(self.terminate_delay)
-            if not self.isalive():
-                return True
-            self.kill(signal.SIGINT)        # SIGTERM is nearly identical to SIGINT
-            time.sleep(self.terminate_delay)
-            if not self.isalive():
-                return True
-            if force:
-                self.kill(signal.SIGKILL)
-                time.sleep(self.terminate_delay)
-                if not self.isalive():
-                    return True
-                else:
-                    return False
-            return False
-        except OSError:
-            # I think there are kernel timing issues that sometimes cause
-            # this to happen. I think isalive() reports True, but the
-            # process is dead to the kernel.
-            # Make one last attempt to see if the kernel is up to date.
-            time.sleep(self.terminate_delay)
-            if not self.isalive():
-                return True
-            else:
-                return False
-
-    def kill(self, sig):
-
-        '''This sends the given signal to the child application. In keeping
-        with UNIX tradition it has a misleading name. It does not necessarily
-        kill the child unless you send the right signal. '''
-
-        # Same as os.kill, but the pid is given for you.
-        if self.isalive():
-            os.kill(self.pid, sig)
-
-    def wait(self):
-
-        '''This waits until the child exits. This is a blocking call. This will
-        not read any data from the child, so this will block forever if the
-        child has unread output and has terminated. In other words, the child
-        may have printed output then called exit(), but, the child is
-        technically still alive until its output is read by the parent. '''
-
-        if self.isalive():
-            pid, status = os.waitpid(self.pid, 0)
-        else:
-            raise Exception('Cannot wait for dead child process.')
-        self.exit_code = os.WEXITSTATUS(status)
-        if os.WIFEXITED(status):
-            self.exit_code = os.WEXITSTATUS(status)
-        elif os.WIFSIGNALED(status):
-            self.exit_code = os.WTERMSIG(status)
-        elif os.WIFSTOPPED(status):
-            # You can't call wait() on a child process in the stopped state.
-            raise Exception('Called wait() on a stopped child ' +
-                    'process. This is not supported. Is some other ' +
-                    'process attempting job control with our child pid?')
-        return self.exit_code
-
-    def isalive(self):
-
-        '''This tests if the child process is running or not. This is
-        non-blocking. If the child was terminated then this will read the
-        exit code or signalstatus of the child. This returns True if the child
-        process appears to be running or False if not. It can take literally
-        SECONDS for Solaris to return the right status. '''
-
-        if self.mode() == SOCKET:
-            return not self.flag_eof
-
-        if self.exit_code is not None:
-            return False
-
-        if self.flag_eof:
-            # This is for Linux, which requires the blocking form
-            # of waitpid to # get status of a defunct process.
-            # This is super-lame. The flag_eof would have been set
-            # in read_nonblocking(), so this should be safe.
-            waitpid_options = 0
-        else:
-            waitpid_options = os.WNOHANG
-
-        try:
-            pid, status = os.waitpid(self.pid, waitpid_options)
-        except OSError:
-            err = sys.exc_info()[1]
-            # No child processes
-            if err.errno == errno.ECHILD:
-                raise Exception('isalive() encountered condition ' +
-                        'where "terminated" is 0, but there was no child ' +
-                        'process. Did someone else call waitpid() ' +
-                        'on our process?')
-            else:
-                raise err
-
-        # I have to do this twice for Solaris.
-        # I can't even believe that I figured this out...
-        # If waitpid() returns 0 it means that no child process
-        # wishes to report, and the value of status is undefined.
-        if pid == 0:
-            try:
-                ### os.WNOHANG) # Solaris!
-                pid, status = os.waitpid(self.pid, waitpid_options)
-            except OSError as e:
-                # This should never happen...
-                if e.errno == errno.ECHILD:
-                    raise Exception('isalive() encountered condition ' +
-                            'that should never happen. There was no child ' +
-                            'process. Did someone else call waitpid() ' +
-                            'on our process?')
-                else:
-                    raise
-
-            # If pid is still 0 after two calls to waitpid() then the process
-            # really is alive. This seems to work on all platforms, except for
-            # Irix which seems to require a blocking call on waitpid or select,
-            # so I let read_nonblocking take care of this situation
-            # (unfortunately, this requires waiting through the timeout).
-            if pid == 0:
-                return True
-
-        if pid == 0:
-            return True
-
-        if os.WIFEXITED(status):
-            self.exit_code = os.WEXITSTATUS(status)
-        elif os.WIFSIGNALED(status):
-            self.exit_code = os.WTERMSIG(status)
-        elif os.WIFSTOPPED(status):
-            raise Exception('isalive() encountered condition ' +
-                    'where child process is stopped. This is not ' +
-                    'supported. Is some other process attempting ' +
-                    'job control with our child pid?')
-        return False
-
-    def interact(self, escape_character=chr(29), input_filter = None, output_filter = None, raw_rw = True):
-        """
-        when stdin is passed using os.pipe, backspace key will not work as expected,
-        if wfd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so you should choose the right input when using zio
-        """
-        if self.mode() == SOCKET:
-            while self.isalive():
-                try:
-                    r, w, e = self.__select([self.rfd, pty.STDIN_FILENO], [], [])
-                except KeyboardInterrupt:
-                    break
-                if self.rfd in r:
-                    try:
-                        data = None
-                        data = self._read(1024)
-                        if data:
-                            if output_filter: data = output_filter(data)
-                            stdout(raw_rw and data or self._print_read(data))
-                        else:       # EOF
-                            self.flag_eof = True
-                            break
-                    except EOF:
-                        self.flag_eof = True
-                        break
-                if pty.STDIN_FILENO in r:
-                    try:
-                        data = None
-                        data = os.read(pty.STDIN_FILENO, 1024)
-                    except OSError as e:
-                        # the subprocess may have closed before we get to reading it
-                        if e.errno != errno.EIO:
-                            raise
-                    if data is not None:
-                        if input_filter: data = input_filter(data)
-                        i = input_filter and -1 or data.rfind(escape_character)
-                        if i != -1: data = data[:i]
-                        try:
-                            while data != b'' and self.isalive():
-                                n = self._write(data)
-                                data = data[n:]
-                            if i != -1:
-                                break
-                        except:         # write error, may be socket.error, Broken pipe
-                            break
-            return
-
-        self.buffer = str()
-        # if input_filter is not none, we should let user do some line editing
-        if not input_filter and os.isatty(pty.STDIN_FILENO):
-            mode = tty.tcgetattr(pty.STDIN_FILENO)  # mode will be restored after interact
-            self.ttyraw(pty.STDIN_FILENO)        # set to raw mode to pass all input thru, supporting apps as vim
-        if os.isatty(self.wfd):
-            # here, enable cooked mode for process stdin
-            # but we should only enable for those who need cooked mode, not stuff like vim
-            # we just do a simple detection here
-            wfd_mode = tty.tcgetattr(self.wfd)
-            if self.debug:
-                log('wfd now mode = ' + repr(wfd_mode), f = self.debug)
-                log('wfd raw mode = ' + repr(self._wfd_raw_mode), f = self.debug)
-                log('wfd ini mode = ' + repr(self._wfd_init_mode), f = self.debug)
-            if wfd_mode == self._wfd_raw_mode:     # if untouched by forked child
-                tty.tcsetattr(self.wfd, tty.TCSAFLUSH, self._wfd_init_mode)
-                if self.debug:
-                    log('change wfd back to init mode', f = self.debug)
-            # but wait, things here are far more complex than that
-            # most applications set mode not by setting it to some value, but by flipping some bits in the flags
-            # so, if we set wfd raw mode at the beginning, we are unable to set the correct mode here
-            # to solve this situation, set stdin = TTY_RAW, but note that you will need to manually escape control characters by prefixing Ctrl-V
-
-        try:
-            rfdlist = [self.rfd, pty.STDIN_FILENO]
-            if os.isatty(self.wfd):
-                # wfd for tty echo
-                rfdlist.append(self.wfd)
-            while self.isalive():
-                if len(rfdlist) == 0: break
-                if self.rfd not in rfdlist: break
-                try:
-                    r, w, e = self.__select(rfdlist, [], [])
-                except KeyboardInterrupt:
-                    break
-                if self.debug: log('r  = ' + repr(r), f = self.debug)
-                if self.wfd in r:          # handle tty echo back first if wfd is a tty
-                    try:
-                        data = None
-                        data = os.read(self.wfd, 1024)
-                    except OSError as e:
-                        if e.errno != errno.EIO:
-                            raise
-                    if data:
-                        if output_filter: data = output_filter(data)
-                        # already translated by tty, so don't wrap print_write anymore by default, unless raw_rw set to False
-                        stdout(raw_rw and data or self._print_write(data))
-                    else:
-                        rfdlist.remove(self.wfd)
-                if self.rfd in r:
-                    try:
-                        data = None
-                        data = os.read(self.rfd, 1024)
-                    except OSError as e:
-                        if e.errno != errno.EIO:
-                            raise
-                    if data:
-                        if output_filter: data = output_filter(data)
-                        # now we are in interact mode, so users want to see things in real, don't wrap things with print_read here by default, unless raw_rw set to False
-                        stdout(raw_rw and data or self._print_read(data))
-                    else:
-                        rfdlist.remove(self.rfd)
-                        self.flag_eof = True
-                if pty.STDIN_FILENO in r:
-                    try:
-                        data = None
-                        data = os.read(pty.STDIN_FILENO, 1024)
-                    except OSError as e:
-                        # the subprocess may have closed before we get to reading it
-                        if e.errno != errno.EIO:
-                            raise
-                    if self.debug and os.isatty(self.wfd):
-                        wfd_mode = tty.tcgetattr(self.wfd)
-                        log('stdin wfd mode = ' + repr(wfd_mode), f = self.debug)
-                    # in BSD, you can still read '' from rfd, so never use `data is not None` here
-                    if data:
-                        if input_filter: data = input_filter(data)
-                        i = input_filter and -1 or data.rfind(escape_character)
-                        if i != -1: data = data[:i]
-                        if not os.isatty(self.wfd):     # we must do the translation when tty does not help
-                            data = data.replace('\r', '\n')
-                            # also echo back by ourselves, now we are echoing things we input by hand, so there is no need to wrap with print_write by default, unless raw_rw set to False
-                            stdout(raw_rw and data or self._print_write(data))
-                        while data != b'' and self.isalive():
-                            n = self._write(data)
-                            data = data[n:]
-                        if i != -1:
-                            self.end(force_close = True)
-                            break
-                    else:
-                        self.end(force_close = True)
-                        rfdlist.remove(pty.STDIN_FILENO)
-            while True:     # read the final buffered output, note that the process probably is not alive, so use while True to read until end (fix pipe stdout interact mode bug)
-                r, w, e = self.__select([self.rfd], [], [], timeout = self.close_delay)
-                if self.rfd in r:
-                    try:
-                        data = None
-                        data = os.read(self.rfd, 1024)
-                    except OSError as e:
-                        if e.errno != errno.EIO:
-                            raise
-                    # in BSD, you can still read '' from rfd, so never use `data is not None` here
-                    if data:
-                        if output_filter: data = output_filter(data)
-                        stdout(raw_rw and data or self._print_read(data))
-                    else:
-                        self.flag_eof = True
-                        break
-                else:
-                    break
-        finally:
-            if not input_filter and os.isatty(pty.STDIN_FILENO):
-                tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, mode)
-            if os.isatty(self.wfd):
-                self.ttyraw(self.wfd)
-
-    def flush(self):
-        """
-        just keep to be a file-like object
-        """
-        pass
-
-    def isatty(self):
-        '''This returns True if the file descriptor is open and connected to a
-        tty(-like) device, else False. '''
-
-        return os.isatty(self.rfd)
-
-    def ttyraw(self, fd, when = tty.TCSAFLUSH, echo = False, raw_in = True, raw_out = False):
+    def _ttyraw(self, fd, when = tty.TCSAFLUSH, echo = False, raw_in = True, raw_out = False):
         mode = tty.tcgetattr(fd)[:]
         if raw_in:
             mode[tty.IFLAG] = mode[tty.IFLAG] & ~(tty.BRKINT | tty.ICRNL | tty.INPCK | tty.ISTRIP | tty.IXON)
@@ -918,814 +1676,8 @@ class zio(object):
         mode[tty.CC][tty.VTIME] = 0
         tty.tcsetattr(fd, when, mode)
 
-    def mode(self):
-
-        if not hasattr(self, '_io_mode'):
-
-            if hostport_tuple(self.target) or isinstance(self.target, socket.socket):
-                self._io_mode = SOCKET
-            else:
-                # TODO: add more check condition
-                self._io_mode = PROCESS
-
-        return self._io_mode
-
-    def __select(self, iwtd, owtd, ewtd, timeout=None):
-
-        '''This is a wrapper around select.select() that ignores signals. If
-        select.select raises a select.error exception and errno is an EINTR
-        error then it is ignored. Mainly this is used to ignore sigwinch
-        (terminal resize). '''
-
-        # if select() is interrupted by a signal (errno==EINTR) then
-        # we loop back and enter the select() again.
-        if timeout is not None:
-            end_time = time.time() + timeout
-        while True:
-            try:
-                return select.select(iwtd, owtd, ewtd, timeout)
-            except select.error:
-                err = sys.exc_info()[1]
-                if err[0] == errno.EINTR:
-                    # if we loop back we have to subtract the
-                    # amount of time we already waited.
-                    if timeout is not None:
-                        timeout = end_time - time.time()
-                        if timeout < 0:
-                            return([], [], [])
-                else:
-                    # something else caused the select.error, so
-                    # this actually is an exception.
-                    raise
-
-    def writelines(self, sequence):
-        n = 0
-        for s in sequence:
-            n += self.writeline(s)
-        return n
-
-    def writeline(self, s = ''):
-        return self.write(s + os.linesep)
-
-    def write(self, s):
-        if not s: return 0
-        if self.mode() == SOCKET:
-            if self.print_write: stdout(self._print_write(s))
-            self.sock.sendall(s)
-            return len(s)
-        elif self.mode() == PROCESS:
-            #if not self.writable(): raise Exception('subprocess stdin not writable')
-            time.sleep(self.write_delay)
-
-            if not isinstance(s, bytes): s = s.encode('utf-8')
-
-            ret = os.write(self.wfd, s)
-
-            # don't use echo backed chars, because
-            # 1. input/output will not be cleaner, I mean, they are always in a mess
-            # 2. this is a unified interface for pipe/tty write
-            # 3. echo back characters will translate control chars into ^@ ^A ^B ^C, ah, ugly!
-            if self.print_write: stdout(self._print_write(s))
-
-            return ret
-
-    def end(self, force_close = False):
-        '''
-        end of writing stream, but we can still read
-        '''
-        if self.mode() == SOCKET:
-            self.sock.shutdown(socket.SHUT_WR)
-        else:
-            if not os.isatty(self.wfd):     # pipes can be closed harmlessly
-                os.close(self.wfd)
-            # for pty, close master fd in Mac won't cause slave fd input/output error, so let's do it!
-            elif platform.system() == 'Darwin':
-                os.close(self.wfd)
-            else:       # assume Linux here
-                # according to http://linux.die.net/man/3/cfmakeraw
-                # set min = 0 and time > 0, will cause read timeout and return 0 to indicate EOF
-                # but the tricky thing here is, if child read is invoked before this
-                # it will still block forever, so you have to call end before that happens
-                mode = tty.tcgetattr(self.wfd)[:]
-                mode[tty.CC][tty.VMIN] = 0
-                mode[tty.CC][tty.VTIME] = 1
-                tty.tcsetattr(self.wfd, tty.TCSAFLUSH, mode)
-                if force_close:
-                    time.sleep(self.close_delay)
-                    os.close(self.wfd)  # might cause EIO (input/output error)! use force_close at your own risk
-        return
-
-    def close(self, force = True):
-        '''
-        close and clean up, nothing can and should be done after closing
-        '''
-        if self.closed:
-            return
-        if self.mode() == 'socket':
-            if self.sock:
-                self.sock.close()
-            self.sock = None
-        else:
-            try:
-                os.close(self.wfd)
-            except:
-                pass    # may already closed in write_eof
-            os.close(self.rfd)
-            time.sleep(self.close_delay)
-            if self.isalive():
-                if not self.terminate(force):
-                    raise Exception('Could not terminate child process')
-        self.flag_eof = True
-        self.rfd = -1
-        self.wfd = -1
-        self.closed = True
-
-    def read(self, size = None, timeout = -1):
-        if size == 0:
-            return str()
-        elif size < 0 or size is None:
-            self.read_loop(searcher_re(self.compile_pattern_list(EOF)), timeout = timeout)
-            return self.before
-
-        cre = re.compile('.{%d}' % size, re.DOTALL)
-        index = self.read_loop(searcher_re(self.compile_pattern_list([cre, EOF])), timeout = timeout)
-        if index == 0:
-            assert self.before == ''
-            return self.after
-        return self.before
-
-    def read_until_timeout(self, timeout = 0.05):
-        try:
-            incoming = self.buffer
-            while True:
-                c = self.read_nonblocking(2048, timeout)
-                incoming = incoming + c
-                if self.mode() == PROCESS: time.sleep(0.0001)
-        except EOF:
-            err = sys.exc_info()[1]
-            self.buffer = str()
-            self.before = str()
-            self.after = EOF
-            self.match = incoming
-            self.match_index = None
-            raise EOF(str(err) + '\n' + str(self))
-        except TIMEOUT:
-            self.buffer = str()
-            self.before = str()
-            self.after = TIMEOUT
-            self.match = incoming
-            self.match_index = None
-            return incoming
-        except:
-            self.before = str()
-            self.after = None
-            self.match = incoming
-            self.match_index = None
-            raise
-
-    read_eager = read_until_timeout
-
-    def readable(self):
-        return self.__select([self.rfd], [], [], 0) == ([self.rfd], [], [])
-
-    def readline(self, size = -1):
-        if size == 0:
-            return str()
-        lineseps = [b'\r\n', b'\n', EOF]
-        index = self.read_loop(searcher_re(self.compile_pattern_list(lineseps)))
-        if index < 2:
-            return self.before + lineseps[index]
-        else:
-            return self.before
-
-    read_line = readline
-
-    def readlines(self, sizehint = -1):
-        lines = []
-        while True:
-            line = self.readline()
-            if not line:
-                break
-            lines.append(line)
-        return lines
-
-    def read_until(self, pattern_list, timeout = -1, searchwindowsize = None):
-        if (isinstance(pattern_list, str) or
-                pattern_list in (TIMEOUT, EOF)):
-            pattern_list = [pattern_list]
-
-        def prepare_pattern(pattern):
-            if pattern in (TIMEOUT, EOF):
-                return pattern
-            if isinstance(pattern, str):
-                return pattern
-            self._pattern_type_err(pattern)
-
-        try:
-            pattern_list = iter(pattern_list)
-        except TypeError:
-            self._pattern_type_err(pattern_list)
-        pattern_list = [prepare_pattern(p) for p in pattern_list]
-        matched = self.read_loop(searcher_string(pattern_list), timeout, searchwindowsize)
-        ret = self.before
-        if isinstance(self.after, str):
-            ret += self.after       # after is the matched string, before is the string before this match
-        return ret          # be compatible with telnetlib.read_until
-
-    def read_until_re(self, pattern, timeout = -1, searchwindowsize = None):
-        compiled_pattern_list = self.compile_pattern_list(pattern)
-        matched = self.read_loop(searcher_re(compiled_pattern_list), timeout, searchwindowsize)
-        ret = self.before
-        if isinstance(self.after, str):
-            ret += self.after
-        return ret
-
-    def read_loop(self, searcher, timeout=-1, searchwindowsize = None):
-
-        '''This is the common loop used inside expect. The 'searcher' should be
-        an instance of searcher_re or searcher_string, which describes how and
-        what to search for in the input.
-
-        See expect() for other arguments, return value and exceptions. '''
-
-        self.searcher = searcher
-
-        if timeout == -1:
-            timeout = self.timeout
-        if timeout is not None:
-            end_time = time.time() + timeout
-
-        try:
-            incoming = self.buffer
-            freshlen = len(incoming)
-            while True:
-                # Keep reading until exception or return.
-                index = searcher.search(incoming, freshlen, searchwindowsize)
-                if index >= 0:
-                    self.buffer = incoming[searcher.end:]
-                    self.before = incoming[: searcher.start]
-                    self.after = incoming[searcher.start: searcher.end]
-                    self.match = searcher.match     # should be equal to self.after now if not (EOF or TIMEOUT)
-                    self.match_index = index
-                    return self.match_index
-                # No match at this point
-                if (timeout is not None) and (timeout < 0):
-                    raise TIMEOUT('Timeout exceeded in expect_any().')
-                # Still have time left, so read more data
-                c = self.read_nonblocking(2048, timeout)
-                freshlen = len(c)
-                time.sleep(0.0001)
-                incoming = incoming + c
-                if timeout is not None:
-                    timeout = end_time - time.time()
-        except EOF:
-            err = sys.exc_info()[1]
-            self.buffer = str()
-            self.before = incoming
-            self.after = EOF
-            index = searcher.eof_index
-            if index >= 0:
-                self.match = EOF
-                self.match_index = index
-                return self.match_index
-            else:
-                self.match = None
-                self.match_index = None
-                raise EOF(str(err) + '\n' + str(self))
-        except TIMEOUT:
-            err = sys.exc_info()[1]
-            self.buffer = incoming
-            self.before = incoming
-            self.after = TIMEOUT
-            index = searcher.timeout_index
-            if index >= 0:
-                self.match = TIMEOUT
-                self.match_index = index
-                return self.match_index
-            else:
-                self.match = None
-                self.match_index = None
-                raise TIMEOUT(str(err) + '\n' + str(self))
-        except:
-            self.before = incoming
-            self.after = None
-            self.match = None
-            self.match_index = None
-            raise
-
-    def _pattern_type_err(self, pattern):
-        raise TypeError('got {badtype} ({badobj!r}) as pattern, must be one'
-                        ' of: {goodtypes}, pexpect.EOF, pexpect.TIMEOUT'\
-                        .format(badtype=type(pattern), badobj=pattern, goodtypes='str'))
-
-    def compile_pattern_list(self, patterns):
-
-        '''This compiles a pattern-string or a list of pattern-strings.
-        Patterns must be a StringType, EOF, TIMEOUT, SRE_Pattern, or a list of
-        those. Patterns may also be None which results in an empty list (you
-        might do this if waiting for an EOF or TIMEOUT condition without
-        expecting any pattern).
-
-        This is used by expect() when calling expect_list(). Thus expect() is
-        nothing more than::
-
-             cpl = self.compile_pattern_list(pl)
-             return self.expect_list(cpl, timeout)
-
-        If you are using expect() within a loop it may be more
-        efficient to compile the patterns first and then call expect_list().
-        This avoid calls in a loop to compile_pattern_list()::
-
-             cpl = self.compile_pattern_list(my_pattern)
-             while some_condition:
-                ...
-                i = self.expect_list(clp, timeout)
-                ...
-        '''
-
-        if patterns is None:
-            return []
-        if not isinstance(patterns, list):
-            patterns = [patterns]
-
-        # Allow dot to match \n
-        compile_flags = re.DOTALL
-        if self.ignorecase:
-            compile_flags = compile_flags | re.IGNORECASE
-        compiled_pattern_list = []
-        for idx, p in enumerate(patterns):
-            if isinstance(p, str):
-                compiled_pattern_list.append(re.compile(p, compile_flags))
-            elif p is EOF:
-                compiled_pattern_list.append(EOF)
-            elif p is TIMEOUT:
-                compiled_pattern_list.append(TIMEOUT)
-            elif isinstance(p, type(re.compile(''))):
-                compiled_pattern_list.append(p)
-            else:
-                self._pattern_type_err(p)
-        return compiled_pattern_list
-
-    def _read(self, size):
-        if self.mode() == PROCESS:
-            return os.read(self.rfd, size)
-        else:
-            try:
-                return self.sock.recv(size)
-            except socket.error as err:
-                if err.args[0] == errno.ECONNRESET:
-                    raise EOF('Connection reset by peer')
-                raise err
-
-    def _write(self, s):
-        if self.mode() == PROCESS:
-            return os.write(self.wfd, s)
-        else:
-            self.sock.sendall(s)
-            return len(s)
-
-    def read_nonblocking(self, size=1, timeout=-1):
-        '''This reads at most size characters from the child application. It
-        includes a timeout. If the read does not complete within the timeout
-        period then a TIMEOUT exception is raised. If the end of file is read
-        then an EOF exception will be raised.
-
-        If timeout is None then the read may block indefinitely.
-        If timeout is -1 then the self.timeout value is used. If timeout is 0
-        then the child is polled and if there is no data immediately ready
-        then this will raise a TIMEOUT exception.
-
-        The timeout refers only to the amount of time to read at least one
-        character. This is not effected by the 'size' parameter, so if you call
-        read_nonblocking(size=100, timeout=30) and only one character is
-        available right away then one character will be returned immediately.
-        It will not wait for 30 seconds for another 99 characters to come in.
-
-        This is a wrapper around os.read(). It uses select.select() to
-        implement the timeout. '''
-
-        if self.closed:
-            raise ValueError('I/O operation on closed file.')
-
-        if timeout == -1:
-            timeout = self.timeout
-
-        # Note that some systems such as Solaris do not give an EOF when
-        # the child dies. In fact, you can still try to read
-        # from the child_fd -- it will block forever or until TIMEOUT.
-        # For this case, I test isalive() before doing any reading.
-        # If isalive() is false, then I pretend that this is the same as EOF.
-        if not self.isalive():
-            # timeout of 0 means "poll"
-            r, w, e = self.__select([self.rfd], [], [], 0)
-            if not r:
-                self.flag_eof = True
-                raise EOF('End Of File (EOF). Braindead platform.')
-
-        if timeout is not None and timeout > 0:
-            end_time = time.time() + timeout
-        else:
-            end_time = float('inf')
-
-        readfds = [self.rfd]
-
-        if self.mode() == PROCESS:
-            try:
-                os.fstat(self.wfd)
-                readfds.append(self.wfd)
-            except:
-                pass
-
-        while True:
-            now = time.time()
-            if now > end_time: break
-            if timeout is not None and timeout > 0:
-                timeout = end_time - now
-            r, w, e = self.__select(readfds, [], [], timeout)
-
-            if not r:
-                if not self.isalive():
-                    # Some platforms, such as Irix, will claim that their
-                    # processes are alive; timeout on the select; and
-                    # then finally admit that they are not alive.
-                    self.flag_eof = True
-                    raise EOF('End of File (EOF). Very slow platform.')
-                else:
-                    continue
-
-            if self.mode() == PROCESS:
-                try:
-                    if self.wfd in r:
-                        data = os.read(self.wfd, 1024)
-                        if data and self.print_read: stdout(self._print_read(data))
-                except OSError as err:
-                    # wfd read EOF (echo back)
-                    pass
-
-            if self.rfd in r:
-                try:
-                    s = self._read(size)
-                    if s and self.print_read: stdout(self._print_read(s))
-                except OSError:
-                    # Linux does this
-                    self.flag_eof = True
-                    raise EOF('End Of File (EOF). Exception style platform.')
-                if s == b'':
-                    # BSD style
-                    self.flag_eof = True
-                    raise EOF('End Of File (EOF). Empty string style platform.')
-
-                return s
-
-        raise TIMEOUT('Timeout exceeded. size to read: %d' % size)
-        # raise Exception('Reached an unexpected state, timeout = %d' % (timeout))
-
-    def gdb_hint(self, breakpoints = None, relative = None, extras = None):
-        if self.mode() == SOCKET:
-            pid = pidof_socket(self.sock)
-        else:
-            pid = self.pid
-        if not pid:
-            raw_input(colored('[ WARN ] pid unavailable to attach gdb, please find out the pid by your own', 'yellow'))
-            return
-        hints = ['attach %d' % pid]
-        base = 0
-        if relative:
-            vmmap = open('/proc/%d/maps' % pid).read()
-            for line in vmmap.splitlines():
-                if line.lower().find(relative.lower()) > -1:
-                    base = int(line.split('-')[0], 16)
-                    break
-        if breakpoints:
-            for b in breakpoints:
-                hints.append('b *' + hex(base + b))
-        if extras:
-            for e in extras:
-                hints.append(str(e))
-        gdb = colored('zio -l 0.5 -b "For help" -a "`printf \'' + '\\r\\n'.join(hints) + '\\r\\n\'`" gdb', 'magenta') + '\nuse cmdline above to attach gdb then press enter to continue ... '
-        raw_input(gdb)
-
-    def _not_impl(self):
-        raise NotImplementedError("Not Implemented")
-
-    # apis below
-    read_after = read_before = read_between = read_range = _not_impl
-
-class searcher_string(object):
-
-    '''This is a plain string search helper for the spawn.expect_any() method.
-    This helper class is for speed. For more powerful regex patterns
-    see the helper class, searcher_re.
-
-    Attributes:
-
-        eof_index     - index of EOF, or -1
-        timeout_index - index of TIMEOUT, or -1
-
-    After a successful match by the search() method the following attributes
-    are available:
-
-        start - index into the buffer, first byte of match
-        end   - index into the buffer, first byte after match
-        match - the matching string itself
-
-    '''
-
-    def __init__(self, strings):
-
-        '''This creates an instance of searcher_string. This argument 'strings'
-        may be a list; a sequence of strings; or the EOF or TIMEOUT types. '''
-
-        self.eof_index = -1
-        self.timeout_index = -1
-        self._strings = []
-        for n, s in enumerate(strings):
-            if s is EOF:
-                self.eof_index = n
-                continue
-            if s is TIMEOUT:
-                self.timeout_index = n
-                continue
-            self._strings.append((n, s))
-
-    def __str__(self):
-
-        '''This returns a human-readable string that represents the state of
-        the object.'''
-
-        ss = [(ns[0], '    %d: "%s"' % ns) for ns in self._strings]
-        ss.append((-1, 'searcher_string:'))
-        if self.eof_index >= 0:
-            ss.append((self.eof_index, '    %d: EOF' % self.eof_index))
-        if self.timeout_index >= 0:
-            ss.append((self.timeout_index,
-                '    %d: TIMEOUT' % self.timeout_index))
-        ss.sort()
-        ss = list(zip(*ss))[1]
-        return '\n'.join(ss)
-
-    def search(self, buffer, freshlen, searchwindowsize=None):
-
-        '''This searches 'buffer' for the first occurence of one of the search
-        strings.  'freshlen' must indicate the number of bytes at the end of
-        'buffer' which have not been searched before. It helps to avoid
-        searching the same, possibly big, buffer over and over again.
-
-        See class spawn for the 'searchwindowsize' argument.
-
-        If there is a match this returns the index of that string, and sets
-        'start', 'end' and 'match'. Otherwise, this returns -1. '''
-
-        first_match = None
-
-        # 'freshlen' helps a lot here. Further optimizations could
-        # possibly include:
-        #
-        # using something like the Boyer-Moore Fast String Searching
-        # Algorithm; pre-compiling the search through a list of
-        # strings into something that can scan the input once to
-        # search for all N strings; realize that if we search for
-        # ['bar', 'baz'] and the input is '...foo' we need not bother
-        # rescanning until we've read three more bytes.
-        #
-        # Sadly, I don't know enough about this interesting topic. /grahn
-
-        for index, s in self._strings:
-            if searchwindowsize is None:
-                # the match, if any, can only be in the fresh data,
-                # or at the very end of the old data
-                offset = -(freshlen + len(s))
-            else:
-                # better obey searchwindowsize
-                offset = -searchwindowsize
-            n = buffer.find(s, offset)
-            if n >= 0 and (first_match is None or n < first_match):
-                first_match = n
-                best_index, best_match = index, s
-        if first_match is None:
-            return -1
-        self.match = best_match
-        self.start = first_match
-        self.end = self.start + len(self.match)
-        return best_index
-
-class searcher_re(object):
-
-    '''This is regular expression string search helper for the
-    spawn.expect_any() method. This helper class is for powerful
-    pattern matching. For speed, see the helper class, searcher_string.
-
-    Attributes:
-
-        eof_index     - index of EOF, or -1
-        timeout_index - index of TIMEOUT, or -1
-
-    After a successful match by the search() method the following attributes
-    are available:
-
-        start - index into the buffer, first byte of match
-        end   - index into the buffer, first byte after match
-        match - the re.match object returned by a succesful re.search
-
-    '''
-
-    def __init__(self, patterns):
-
-        '''This creates an instance that searches for 'patterns' Where
-        'patterns' may be a list or other sequence of compiled regular
-        expressions, or the EOF or TIMEOUT types.'''
-
-        self.eof_index = -1
-        self.timeout_index = -1
-        self._searches = []
-        for n, s in zip(list(range(len(patterns))), patterns):
-            if s is EOF:
-                self.eof_index = n
-                continue
-            if s is TIMEOUT:
-                self.timeout_index = n
-                continue
-            self._searches.append((n, s))
-
-    def __str__(self):
-
-        '''This returns a human-readable string that represents the state of
-        the object.'''
-
-        #ss = [(n, '    %d: re.compile("%s")' %
-        #    (n, repr(s.pattern))) for n, s in self._searches]
-        ss = list()
-        for n, s in self._searches:
-            try:
-                ss.append((n, '    %d: re.compile("%s")' % (n, s.pattern)))
-            except UnicodeEncodeError:
-                # for test cases that display __str__ of searches, dont throw
-                # another exception just because stdout is ascii-only, using
-                # repr()
-                ss.append((n, '    %d: re.compile(%r)' % (n, s.pattern)))
-        ss.append((-1, 'searcher_re:'))
-        if self.eof_index >= 0:
-            ss.append((self.eof_index, '    %d: EOF' % self.eof_index))
-        if self.timeout_index >= 0:
-            ss.append((self.timeout_index, '    %d: TIMEOUT' %
-                self.timeout_index))
-        ss.sort()
-        ss = list(zip(*ss))[1]
-        return '\n'.join(ss)
-
-    def search(self, buffer, freshlen, searchwindowsize=None):
-
-        '''This searches 'buffer' for the first occurence of one of the regular
-        expressions. 'freshlen' must indicate the number of bytes at the end of
-        'buffer' which have not been searched before.
-
-        See class spawn for the 'searchwindowsize' argument.
-
-        If there is a match this returns the index of that string, and sets
-        'start', 'end' and 'match'. Otherwise, returns -1.'''
-
-        first_match = None
-        # 'freshlen' doesn't help here -- we cannot predict the
-        # length of a match, and the re module provides no help.
-        if searchwindowsize is None:
-            searchstart = 0
-        else:
-            searchstart = max(0, len(buffer) - searchwindowsize)
-        for index, s in self._searches:
-            match = s.search(buffer, searchstart)
-            if match is None:
-                continue
-            n = match.start()
-            if first_match is None or n < first_match:
-                first_match = n
-                the_match = match
-                best_index = index
-        if first_match is None:
-            return -1
-        self.start = first_match
-        self.match = the_match
-        self.end = self.match.end()
-        return best_index
-
-
-def which(filename):
-
-    '''This takes a given filename; tries to find it in the environment path;
-    then checks if it is executable. This returns the full path to the filename
-    if found and executable. Otherwise this returns None.'''
-
-    # Special case where filename contains an explicit path.
-    if os.path.dirname(filename) != '':
-        if os.access(filename, os.X_OK):
-            return filename
-    if 'PATH' not in os.environ or os.environ['PATH'] == '':
-        p = os.defpath
-    else:
-        p = os.environ['PATH']
-    pathlist = p.split(os.pathsep)
-    for path in pathlist:
-        ff = os.path.join(path, filename)
-        if os.access(ff, os.X_OK):
-            return ff
-    return None
-
-def split_command_line(command_line):       # this piece of code comes from pexcept, thanks very much!
-
-    '''This splits a command line into a list of arguments. It splits arguments
-    on spaces, but handles embedded quotes, doublequotes, and escaped
-    characters. It's impossible to do this with a regular expression, so I
-    wrote a little state machine to parse the command line. '''
-
-    arg_list = []
-    arg = ''
-
-    # Constants to name the states we can be in.
-    state_basic = 0
-    state_esc = 1
-    state_singlequote = 2
-    state_doublequote = 3
-    # The state when consuming whitespace between commands.
-    state_whitespace = 4
-    state = state_basic
-
-    for c in command_line:
-        if state == state_basic or state == state_whitespace:
-            if c == '\\':
-                # Escape the next character
-                state = state_esc
-            elif c == r"'":
-                # Handle single quote
-                state = state_singlequote
-            elif c == r'"':
-                # Handle double quote
-                state = state_doublequote
-            elif c.isspace():
-                # Add arg to arg_list if we aren't in the middle of whitespace.
-                if state == state_whitespace:
-                    # Do nothing.
-                    None
-                else:
-                    arg_list.append(arg)
-                    arg = ''
-                    state = state_whitespace
-            else:
-                arg = arg + c
-                state = state_basic
-        elif state == state_esc:
-            arg = arg + c
-            state = state_basic
-        elif state == state_singlequote:
-            if c == r"'":
-                state = state_basic
-            else:
-                arg = arg + c
-        elif state == state_doublequote:
-            if c == r'"':
-                state = state_basic
-            else:
-                arg = arg + c
-
-    if arg != '':
-        arg_list.append(arg)
-    return arg_list
-
-def all_pids():
-    return [int(pid) for pid in os.listdir('/proc') if pid.isdigit()]
-
-def pidof_socket(prog):        # code borrowed from https://github.com/Gallopsled/pwntools to implement gdb attach of local socket
-    def toaddr((host, port)):
-        return '%08X:%04X' % (l32(socket.inet_aton(host)), port)
-    def getpid(loc, rem):
-        loc = toaddr(loc)
-        rem = toaddr(rem)
-        inode = 0
-        with open('/proc/net/tcp') as fd:
-            for line in fd:
-                line = line.split()
-                if line[1] == loc and line[2] == rem:
-                    inode = line[9]
-        if inode == 0:
-            return []
-        for pid in all_pids():
-            try:
-                for fd in os.listdir('/proc/%d/fd' % pid):
-                    fd = os.readlink('/proc/%d/fd/%s' % (pid, fd))
-                    m = re.match('socket:\[(\d+)\]', fd)
-                    if m:
-                        this_inode = m.group(1)
-                        if this_inode == inode:
-                            return pid
-            except:
-                pass
-    sock = prog.getsockname()
-    peer = prog.getpeername()
-    pids = [getpid(peer, sock), getpid(sock, peer)]
-    if pids[0]: return pids[0]
-    if pids[1]: return pids[1]
-    return None
-
-def hostport_tuple(target):
-    return type(target) == tuple and len(target) == 2 and isinstance(target[1], int) and target[1] >= 0 and target[1] < 65536
+# -------------------------------------------------
+# =====> command line usage as a standalone app <=====
 
 def usage():
     print("""
@@ -1767,9 +1719,9 @@ examples:
 """)
 
 def cmdline(argv):
-    import getopt
+    import getopt       # use getopt for better compatibility, argparse is not introduced until python2.7
     try:
-        opts, args = getopt.getopt(argv, 'hi:o:t:r:w:d:a:b:l:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'ahead=', 'before=', 'debug=', 'delay='])
+        opts, args = getopt.getopt(argv, 'hi:o:t:r:w:d:e:a:b:l:', ['help', 'stdin=', 'stdout=', 'timeout=', 'read=', 'write=', 'decode=', 'encode=', 'ahead=', 'before=', 'debug=', 'delay=', 'show-input=', 'show-output='])
     except getopt.GetoptError as err:
         print(str(err))
         usage()
@@ -1780,6 +1732,9 @@ def cmdline(argv):
         'stdout': TTY,
     }
     decode = None
+    encode = None
+    show_input = None
+    show_output = None
     ahead = None
     before = None
     for o, a in opts:
@@ -1829,12 +1784,27 @@ def cmdline(argv):
                 decode = EVAL
             elif a.lower() == 'unhex':
                 decode = UNHEX
+        elif o in ('-e', '--encode'):
+            if a.lower() == 'repr':
+                encode = REPR
+            elif a.lower() == 'hex':
+                encode = HEX
+            elif a.lower() == 'bin':
+                encode = BIN
+        elif o in ('--show-input', ):
+            show_input = a.lower() in ('true', '1', 't', 'yes', 'y')
+        elif o in ('--show-output', ):
+            show_output = a.lower() in ('true', '1', 't', 'yes', 'y')
         elif o in ('-a', '--ahead'):
             ahead = a
         elif o in ('-b', '--before'):
             before = a
         elif o in ('--debug',):
-            kwargs['debug'] = open(a, 'w')
+            if os.path.exists(a):
+                choice = input('file exists at %s, overwrite(Y/n)?' % a)
+                if choice.strip().lower() == 'n':
+                    return
+            kwargs['debug'] = open(a, 'wb')
         elif o in ('-l', '--delay'):
             kwargs['write_delay'] = float(a)
 
@@ -1842,7 +1812,7 @@ def cmdline(argv):
     if len(args) == 2:
         try:
             port = int(args[1])
-            if hostport_tuple((args[0], port)):
+            if is_hostport_tuple((args[0], port)):
                 target = (args[0], port)
         except:
             pass
@@ -1854,15 +1824,13 @@ def cmdline(argv):
 
     io = zio(target, **kwargs)
     if before:
-        io.read_until(before)
+        io.read_until(before.encode())
     if ahead:
-        io.write(ahead)
-    io.interact(input_filter = decode, raw_rw = False)
+        io.write(ahead.encode())
+    io.interact(write_transform=decode, read_transform=encode, show_input=show_input, show_output=show_output)
 
 def main():
-    if len(sys.argv) >= 2:
-        test = sys.argv[1]
-    else:
+    if len(sys.argv) < 2:
         usage()
         sys.exit(0)
 
@@ -1870,5 +1838,20 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+# -------------------------------------------------
+# =====> export useful objects and functions <=====
+
+__all__ = [
+    'l8', 'b8', 'l16', 'b16', 'l32', 'b32', 'l64', 'b64', 'convert_packing',
+    'colored',
+    'match_pattern',
+    'write_stdout', 'write_stderr',
+    'xor', 'bytes2hex', 'hex2bytes', 'tohex', 'unhex',
+    'zio',
+    'HEX', 'TOHEX', 'UNHEX', 'EVAL', 'REPR', 'RAW', 'NONE', 'HEXDUMP', 'HEXDUMP_INDENT4', 'HEXDUMP_INDENT8', 'HEXDUMP_INDENT16',
+    'COLORED',
+    'TTY', 'PIPE', 'TTY_RAW',
+]
 
 # vi:set et ts=4 sw=4 ft=python :
