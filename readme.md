@@ -1,7 +1,7 @@
 
 # zio
 
-[![Build Status](https://travis-ci.org/zTrix/zio.png)](https://travis-ci.org/zTrix/zio)
+[![Build Status](https://travis-ci.org/zTrix/zio.png)](https://travis-ci.org/zTrix/zio) [![support-version](https://img.shields.io/pypi/pyversions/zio)](https://img.shields.io/pypi/pyversions/zio)
 
 [zio] is an easy-to-use io library for pwning development, supporting an unified interface for local process pwning and TCP socket io.
 
@@ -12,9 +12,9 @@ The following code illustrate the basic idea.
 ```python
 from zio import *
 
-debug_local = True
+is_local = True
 
-if debug_local:
+if is_local:
     io = zio('./buggy-server')            # used for local pwning development
 else:
     io = zio(('1.2.3.4', 1337))           # used to exploit remote service
@@ -59,9 +59,9 @@ $ pip install zio
 ```python
 from zio import *
 
-debug_local = True
+is_local = True
 
-if debug_local:
+if is_local:
     io = zio('./buggy-server')
 else:
     io = zio((pwn.server, 1337))
@@ -159,7 +159,7 @@ You can even talk with vim for prefix and then interact by hand to continue norm
 
 ## Thanks (Also references)
 
- - [pexpect](https://github.com/pexpect/pexpect) I borrowed a lot of code from here
+ - [pexpect](https://github.com/pexpect/pexpect) borrowed a lot of code from here
  - [sh](https://github.com/amoffat/sh)
  - python subprocess module
  - TTY related
