@@ -258,6 +258,22 @@ def write_debug(f, data, show_time=True, end=b'\n'):
         f.write(end)
     f.flush()
     
+def ttyraw(fd, when=tty.TCSAFLUSH, echo=False, raw_in=True, raw_out=False):
+    mode = tty.tcgetattr(fd)[:]
+    if raw_in:
+        mode[tty.IFLAG] = mode[tty.IFLAG] & ~(tty.BRKINT | tty.ICRNL | tty.INPCK | tty.ISTRIP | tty.IXON)
+        mode[tty.CFLAG] = mode[tty.CFLAG] & ~(tty.CSIZE | tty.PARENB)
+        mode[tty.CFLAG] = mode[tty.CFLAG] | tty.CS8
+        if echo:
+            mode[tty.LFLAG] = mode[tty.LFLAG] & ~(tty.ICANON | tty.IEXTEN | tty.ISIG)
+        else:
+            mode[tty.LFLAG] = mode[tty.LFLAG] & ~(tty.ECHO | tty.ICANON | tty.IEXTEN | tty.ISIG)
+    if raw_out:
+        mode[tty.OFLAG] = mode[tty.OFLAG] & ~(tty.OPOST)
+    mode[tty.CC][tty.VMIN] = 1
+    mode[tty.CC][tty.VTIME] = 0
+    tty.tcsetattr(fd, when, mode)
+
 # -------------------------------------------------
 # =====> zio class modes and params <=====
 
@@ -747,11 +763,11 @@ class zio(object):
     sendeof = send_eof
     end = send_eof      # for zio 1.0 compatibility
 
-    def interact(self, read_transform=None, write_transform=None, show_input=None, show_output=None):
+    def interact(self, **kwargs):
         '''
         interact with current tty stdin/stdout
         '''
-        self.io.interact(read_transform=read_transform, write_transform=write_transform, show_input=show_input, show_output=show_output)
+        self.io.interact(**kwargs)
 
     interactive = interact      # for pwntools compatibility
 
@@ -910,11 +926,17 @@ class SocketIO:
         self.sock.shutdown(socket.SHUT_WR)
         if self.debug: write_debug(self.debug, b'SocketIO.send_eof()')
 
-    def interact(self, read_transform=None, write_transform=None, show_input=None, show_output=None):
+    def interact(self, read_transform=None, write_transform=None, show_input=None, show_output=None, raw_mode=False):
         if show_input is None:
             show_input = not os.isatty(pty.STDIN_FILENO)    # if pty, itself will echo; if pipe, we do echo
         if show_output is None:
             show_output = True
+
+        parent_tty_mode = None
+        if os.isatty(pty.STDIN_FILENO) and raw_mode:
+            parent_tty_mode = tty.tcgetattr(pty.STDIN_FILENO)   # save mode and restore after interact
+            ttyraw(pty.STDIN_FILENO)                            # set to raw mode to pass all input thru, supporting remote apps as htop/vim
+
         while not self.is_closed():
             try:
                 r, _w, _e = select_ignoring_useless_signal([self.rfd, pty.STDIN_FILENO], [], [])
@@ -944,6 +966,9 @@ class SocketIO:
                     if show_input:
                         write_stdout(data)
                     self.send(data)
+
+        if parent_tty_mode:
+            tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, parent_tty_mode)
 
     def close(self):
         self.eof_seen = True
@@ -1169,7 +1194,7 @@ class ProcessIO:
                 # so we have to set raw mode here now
                 self._wfd_init_mode = tty.tcgetattr(self.wfd)[:]
                 if stdin == TTY_RAW:
-                    self._ttyraw(self.wfd)
+                    ttyraw(self.wfd)
                     self._wfd_raw_mode = tty.tcgetattr(self.wfd)[:]
                 else:
                     self._wfd_raw_mode = self._wfd_init_mode[:]
@@ -1177,7 +1202,7 @@ class ProcessIO:
             if os.isatty(self.rfd):
                 self._rfd_init_mode = tty.tcgetattr(self.rfd)[:]
                 if stdout == TTY_RAW:
-                    self._ttyraw(self.rfd, raw_in = False, raw_out = True)
+                    ttyraw(self.rfd, raw_in = False, raw_out = True)
                     self._rfd_raw_mode = tty.tcgetattr(self.rfd)[:]
                     if self.debug: write_debug(self.debug, b'stdout tty raw mode: %r\n' % self._rfd_raw_mode)
                 else:
@@ -1316,7 +1341,7 @@ class ProcessIO:
         parent_tty_mode = None
         if os.isatty(pty.STDIN_FILENO) and os.isatty(self.wfd):
             parent_tty_mode = tty.tcgetattr(pty.STDIN_FILENO)   # save mode and restore after interact
-            self._ttyraw(pty.STDIN_FILENO)                      # set to raw mode to pass all input thru, supporting apps as vim
+            ttyraw(pty.STDIN_FILENO)                      # set to raw mode to pass all input thru, supporting apps as vim
             if self.debug: write_debug(self.debug, b'parent tty set to raw mode')
 
             if show_input is None:
@@ -1731,22 +1756,6 @@ class ProcessIO:
         s = struct.pack('HHHH', 0, 0, 0, 0)
         x = fcntl.ioctl(fd, TIOCGWINSZ, s)
         return struct.unpack('HHHH', x)[0:2]
-
-    def _ttyraw(self, fd, when = tty.TCSAFLUSH, echo = False, raw_in = True, raw_out = False):
-        mode = tty.tcgetattr(fd)[:]
-        if raw_in:
-            mode[tty.IFLAG] = mode[tty.IFLAG] & ~(tty.BRKINT | tty.ICRNL | tty.INPCK | tty.ISTRIP | tty.IXON)
-            mode[tty.CFLAG] = mode[tty.CFLAG] & ~(tty.CSIZE | tty.PARENB)
-            mode[tty.CFLAG] = mode[tty.CFLAG] | tty.CS8
-            if echo:
-                mode[tty.LFLAG] = mode[tty.LFLAG] & ~(tty.ICANON | tty.IEXTEN | tty.ISIG)
-            else:
-                mode[tty.LFLAG] = mode[tty.LFLAG] & ~(tty.ECHO | tty.ICANON | tty.IEXTEN | tty.ISIG)
-        if raw_out:
-            mode[tty.OFLAG] = mode[tty.OFLAG] & ~(tty.OPOST)
-        mode[tty.CC][tty.VMIN] = 1
-        mode[tty.CC][tty.VTIME] = 0
-        tty.tcsetattr(fd, when, mode)
 
 # -------------------------------------------------
 # =====> command line usage as a standalone app <=====
