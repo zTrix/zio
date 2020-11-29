@@ -1467,7 +1467,7 @@ class ProcessIO:
             if parent_tty_mode:
                 tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, parent_tty_mode)
             if os.isatty(self.wfd):
-                self._ttyraw(self.wfd)
+                ttyraw(self.wfd)
 
     def close(self, force_close=True):
         '''
