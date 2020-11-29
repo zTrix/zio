@@ -57,6 +57,7 @@ jobs:
         homebrew:
           packages:
             - socat
-          update: true
+      before_install:
+        - "env HOMEBREW_NO_AUTO_UPDATE=1 /usr/local/bin/brew install socat"
       script: 
         - ./test2/test.sh
