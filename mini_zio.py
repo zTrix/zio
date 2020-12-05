@@ -5,8 +5,8 @@ from telnetlib import Telnet
 import socket
 
 class zio:
-    def __init__(self, target):
-        self.io = socket.create_connection(target)
+    def __init__(self, target, timeout=None):
+        self.io = socket.create_connection(target, timeout=timeout)
 
     def read_until(self, pattern):
         if not pattern:
