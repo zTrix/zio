@@ -657,8 +657,12 @@ class zio(object):
         just read 1 or more available bytes (less than size) and return
         '''
         if len(self.buffer):
-            ret = bytes(self.buffer)
-            self.buffer = bytearray()
+            if size is None or size <= 0:
+                ret = bytes(self.buffer)
+                self.buffer = bytearray()
+            else:
+                ret = bytes(self.buffer[:size])
+                self.buffer = self.buffer[size:]
             self.log_read(ret)
             return ret
 

@@ -166,6 +166,17 @@ class ZIOTestCase(unittest.TestCase):
         self.assertEqual(logfile.getvalue(), b'input:received\n')
         io.close()
 
+    def test_read_some(self):
+        server = EchoServer(content=[b'Hello\n'], sleep_between=0.5)
+        server.start()
+        time.sleep(0.1)
+        logfile = BytesIO()
+        
+        io = zio(server.target_addr(), print_read=True, print_write=False)
+        self.assertEqual(io.read(1), b'H')
+        self.assertEqual(io.read_some(1), b'e')
+        io.close()
+
     # ------------------- ProcessIO Tests ---------------------
 
     def test_send_eof(self):
