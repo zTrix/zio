@@ -1250,7 +1250,7 @@ class ProcessIO:
         # If isalive() is false, then I pretend that this is the same as EOF.
         if not self._isalive():
             # timeout of 0 means "poll"
-            r, w, e = select_ignoring_useless_signal([self.rfd], [], [], 0)
+            r, _w, _e = select_ignoring_useless_signal([self.rfd], [], [], 0)
             if not r:
                 self.eof_seen = True
                 raise EOFError('End Of File (EOF). Braindead platform.')
@@ -1277,7 +1277,7 @@ class ProcessIO:
             if timeout is not None and timeout > 0:
                 timeout = end_time - now
 
-            r, w, e = select_ignoring_useless_signal(readfds, [], [], timeout)
+            r, _w, _e = select_ignoring_useless_signal(readfds, [], [], timeout)
             if not r:
                 if not self._isalive():
                     # Some platforms, such as Irix, will claim that their
