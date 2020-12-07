@@ -576,6 +576,15 @@ class zio(object):
         raise TimeoutError if Timeout occured
         '''
         is_read_all = size is None or size < 0
+        incoming = None
+        
+        # log buffer content first
+        if self.buffer:
+            if is_read_all:
+                self.log_read(bytes(self.buffer))
+            else:
+                self.log_read(bytes(self.buffer[:size]))
+
         while True:
             if is_read_all or len(self.buffer) < size:
                 incoming = self.io.recv(1536)
@@ -584,17 +593,19 @@ class zio(object):
                         ret = bytes(self.buffer)
                         # self.buffer.clear()   # note: python2 does not support bytearray.clear()
                         self.buffer = bytearray()
-                        self.log_read(ret)
                         return ret
                     else:
                         raise EOFError('EOF occured before full size read, buffer = %r' % self.buffer)
                 self.buffer.extend(incoming)
 
             if not is_read_all and len(self.buffer) >= size:
+                if incoming:
+                    self.log_read(incoming[:len(incoming) + size - len(self.buffer)])
                 ret = bytes(self.buffer[:size])
                 self.buffer = self.buffer[size:]
-                self.log_read(ret)
                 return ret
+            else:
+                self.log_read(incoming)
 
     read_exact = read
 
