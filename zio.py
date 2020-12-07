@@ -514,7 +514,7 @@ class zio(object):
         '''
         bytes -> IO bytes
         '''
-        if self.print_read and byte_buf is not None:   # should log when byte_buf is empty bytestring
+        if self.print_read and byte_buf:   # should log when byte_buf is empty bytestring
             content = self.read_transform(byte_buf)
             if hasattr(self.logfile, 'buffer'):
                 self.logfile.buffer.write(content)
@@ -526,7 +526,7 @@ class zio(object):
         '''
         bytes -> IO bytes
         '''
-        if self.print_write and byte_buf is not None:   # should log when byte_buf is empty bytestring
+        if self.print_write and byte_buf:   # should log when byte_buf is empty bytestring
             content = self.write_transform(byte_buf)
             if hasattr(self.logfile, 'buffer'):
                 self.logfile.buffer.write(content)
@@ -644,14 +644,20 @@ class zio(object):
         else:
             pattern_list = pattern
 
+        log_pos = 0
+
         while True:
             for p in pattern_list:
                 span = match_pattern(p, self.buffer)
                 if span[0] > -1: # found
-                    ret = self.buffer[:span[1]] if keep == True else self.buffer[:span[0]]
-                    self.log_read(bytes(self.buffer[:span[1]]))
-                    self.buffer = self.buffer[span[1]:]
+                    end_pos = span[1]
+                    ret = self.buffer[:end_pos] if keep == True else self.buffer[:span[0]]
+                    self.log_read(bytes(self.buffer[log_pos:end_pos]))
+                    self.buffer = self.buffer[end_pos:]
                     return bytes(ret)
+
+            self.log_read(bytes(self.buffer[log_pos:]))
+            log_pos = len(self.buffer)
 
             incoming = self.io.recv(1536)
             if incoming is None:
@@ -689,6 +695,9 @@ class zio(object):
         '''
         end_time = time.time() + timeout
 
+        if self.buffer:
+            self.log_read(bytes(self.buffer))
+
         while True:
             r, _w, _e = select_ignoring_useless_signal([self.io.rfd], [], [], timeout)
             data = None
@@ -698,6 +707,7 @@ class zio(object):
                     break
                 elif data:
                     self.buffer.extend(data)
+                    self.log_read(data)
                     break
 
             timeout = end_time - time.time()
@@ -706,7 +716,6 @@ class zio(object):
 
         if len(self.buffer):
             ret = bytes(self.buffer)
-            self.log_read(ret)
             self.buffer = bytearray()
             return ret
         return b''
