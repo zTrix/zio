@@ -1954,7 +1954,7 @@ __all__ = [
     'write_stdout', 'write_stderr',
     'xor', 'bytes2hex', 'hex2bytes', 'tohex', 'unhex',
     'zio',
-    'HEX', 'TOHEX', 'UNHEX', 'EVAL', 'REPR', 'RAW', 'NONE', 'HEXDUMP', 'HEXDUMP_INDENT4', 'HEXDUMP_INDENT8', 'HEXDUMP_INDENT16',
+    'HEX', 'TOHEX', 'UNHEX', 'EVAL', 'REPR', 'RAW', 'NONE', 'HEXDUMP', 'HEXDUMP_INDENT4', 'HEXDUMP_INDENT8', 'HEXDUMP_INDENT16', 'BIN', 'UNBIN',
     'COLORED',
     'TTY', 'PIPE', 'TTY_RAW',
 ]
