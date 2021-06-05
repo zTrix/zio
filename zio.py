@@ -791,6 +791,9 @@ class zio(object):
         '''
         interact with current tty stdin/stdout
         '''
+        if self.buffer:
+            kwargs['buffered'] = bytes(self.buffer)
+            self.buffer = bytearray()
         self.io.interact(**kwargs)
 
     interactive = interact      # for pwntools compatibility
@@ -950,7 +953,7 @@ class SocketIO:
         self.sock.shutdown(socket.SHUT_WR)
         if self.debug: write_debug(self.debug, b'SocketIO.send_eof()')
 
-    def interact(self, read_transform=None, write_transform=None, show_input=None, show_output=None, raw_mode=False):
+    def interact(self, buffered=None, read_transform=None, write_transform=None, show_input=None, show_output=None, raw_mode=False):
         if show_input is None:
             show_input = not os.isatty(pty.STDIN_FILENO)    # if pty, itself will echo; if pipe, we do echo
         if show_output is None:
@@ -960,6 +963,12 @@ class SocketIO:
         if os.isatty(pty.STDIN_FILENO) and raw_mode:
             parent_tty_mode = tty.tcgetattr(pty.STDIN_FILENO)   # save mode and restore after interact
             ttyraw(pty.STDIN_FILENO)                            # set to raw mode to pass all input thru, supporting remote apps as htop/vim
+
+        if buffered is not None:
+            if read_transform is not None:
+                buffered = read_transform(buffered)
+            if show_output:
+                write_stdout(buffered)
 
         while not self.is_closed():
             try:
@@ -1352,7 +1361,7 @@ class ProcessIO:
                 time.sleep(self.close_delay)
                 os.close(self.wfd)  # might cause EIO (input/output error)! use force_close at your own risk
 
-    def interact(self, read_transform=None, write_transform=None, show_input=None, show_output=None):
+    def interact(self, buffered=None, read_transform=None, write_transform=None, show_input=None, show_output=None):
         """
         when stdin is passed using os.pipe, backspace key will not work as expected,
         if wfd is not a tty, then when backspace pressed, I can see that 0x7f is passed, but vim does not delete backwards, so you should choose the right input when using zio
@@ -1373,6 +1382,12 @@ class ProcessIO:
         else:
             if show_input is None:
                 show_input = False      # parent tty in cooked mode and itself has echo back
+
+        if buffered is not None:
+            if read_transform is not None:
+                buffered = read_transform(buffered)
+            if show_output:
+                write_stdout(buffered)
 
         if os.isatty(self.wfd):
             # here, enable cooked mode for process stdin
