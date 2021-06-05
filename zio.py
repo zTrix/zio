@@ -42,7 +42,7 @@
 from __future__ import print_function
 from __future__ import division
 
-__version__ = "2.1.0"
+__version__ = "2.1.1"
 __project__ = "https://github.com/zTrix/zio"
 
 import os
