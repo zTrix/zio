@@ -113,7 +113,7 @@ if True:
 # -------------------------------------------------
 # =====> packing/unpacking related functions <=====
 
-def convert_packing(endian, bits, arg, autopad=False):
+def convert_packing(endian, bits, arg, autopad=False, automod=True):
     """
     given endian, bits spec, do the following
         convert between bytes <--> int
@@ -145,6 +145,8 @@ def convert_packing(endian, bits, arg, autopad=False):
         return list(unpacked) if len(unpacked) > 1 else unpacked[0]
     else:                           # int or [int] -> bytes
         args = list(arg) if isinstance(arg, (list, tuple)) else [arg]
+        if automod:
+            args = [i % (1<<bits) for i in args]
         return struct.pack(endian + pfs[bits] * len(args), *args)
 
 l8 = functools.partial(convert_packing, '<', 8)
@@ -164,7 +166,7 @@ def bytes2hex(s):
     Union{bytes, unicode} -> bytes
     '''
     if isinstance(s, unicode):
-        s = s.encode()
+        s = s.encode('latin-1')
     return binascii.hexlify(s)
 
 def hex2bytes(s, autopad=False):
@@ -172,7 +174,7 @@ def hex2bytes(s, autopad=False):
     bytes -> bytes
     '''
     if isinstance(s, unicode):
-        s = s.encode()
+        s = s.encode('latin-1')
     s = s.strip()
     if len(s) % 2 == 1:
         if autopad == 'left' or autopad == True:
@@ -209,6 +211,8 @@ def match_pattern(pattern, byte_buf):
     pattern -> byte_buf -> index span # (-1, -1) for not found)
     pattern could be bytes or re objects or lambda function which returns index span
     '''
+    if isinstance(pattern, unicode):
+        pattern = pattern.encode('latin-1')
     if isinstance(pattern, bytes):
         i = byte_buf.find(pattern)
         if i > -1:
@@ -289,7 +293,7 @@ def COLORED(f, color='cyan', on_color=None, attrs=None):
 if python_version_major < 3:
     def REPR(s): return b'b' + repr(s) + b'\r\n'
 else:
-    def REPR(s): return str(s).encode() + b'\r\n'
+    def REPR(s): return str(s).encode('latin-1') + b'\r\n'
 
 def EVAL(s):    # now you are not worried about pwning yourself, do not use ast.literal_eval because of 1. encoding issue 2. we only eval string
     st = 0      # 0 for normal, 1 for escape, 2 for \xXX
@@ -1944,9 +1948,9 @@ def cmdline(argv):
 
     io = zio(target, **kwargs)
     if before:
-        io.read_until(before.encode())
+        io.read_until(before.encode('latin-1'))
     if ahead:
-        io.write(ahead.encode())
+        io.write(ahead.encode('latin-1'))
     io.interact(write_transform=decode, read_transform=encode, show_input=show_input, show_output=show_output)
 
 def main():
