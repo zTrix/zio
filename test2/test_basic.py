@@ -33,6 +33,10 @@ class ZIOTestCase(unittest.TestCase):
         # python 2.6 2.7 compatible way
         self.assertRaises(ValueError, b32, '\x00\x00\x00\x00\x01\x00\x00\x00\x02')
 
+        self.assertEqual(l16(-1, automod=True), b'\xff\xff')
+        self.assertEqual(l16(65537, automod=True), b'\x01\x00')
+        self.assertEqual(l16(191291209812301238123018923, automod=True), b'\xab\xba')
+
     def test_encoding(self):
         a = b"\xd8;:Dx-;Fx)=Yx%'L(*6\x01797Sx;:Dx#3[!o6N?\xb0"
         b = b'XOR!'

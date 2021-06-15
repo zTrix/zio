@@ -293,7 +293,7 @@ def COLORED(f, color='cyan', on_color=None, attrs=None):
 if python_version_major < 3:
     def REPR(s): return b'b' + repr(s) + b'\r\n'
 else:
-    def REPR(s): return str(s).encode('latin-1') + b'\r\n'
+    def REPR(s): return str(s).encode() + b'\r\n'
 
 def EVAL(s):    # now you are not worried about pwning yourself, do not use ast.literal_eval because of 1. encoding issue 2. we only eval string
     st = 0      # 0 for normal, 1 for escape, 2 for \xXX
@@ -635,7 +635,7 @@ class zio(object):
         '''
         read until some bytes pattern found
         patter could be one of following:
-        1. bytes
+        1. bytes | unicode(codepoint < 256)
         2. re object(must compile using bytes rather than unicode, e.g: re.compile(b"something"))
         3. callable functions return True for found and False for not found
         4. lists of things above
