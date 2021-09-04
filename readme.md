@@ -94,6 +94,25 @@ The recommended practice is to use b'xxx' everywhere, which is supported by both
 
 Just don't read b'\n' or b'\r', use `read_line()` instead
 
+### example for SSL wrapped socket
+
+```
+hostname = 'xxx.com'
+host = '111.22.33.44'
+port = 31337
+context = ssl.create_default_context()
+context.check_hostname = False
+context.verify_mode = ssl.CERT_NONE
+
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+ssl_sock = context.wrap_socket(s, server_hostname=hostname)
+ssl_sock.connect((host, port))
+
+io = zio(ssl_sock)
+
+...
+```
+
 ### Play with cmdline
 
 Act like netcat
