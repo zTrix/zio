@@ -68,8 +68,34 @@ import atexit
 import resource
 import termios
 import tty
-# works for python2.6 python2.7 and python3
-from distutils.spawn import find_executable
+try:
+    # works for python2.6 python2.7 and python3
+    from distutils.spawn import find_executable
+except ImportError: # some stupid ubuntu
+    def find_executable(executable, path=None):
+        """Tries to find 'executable' in the directories listed in 'path'.
+
+        A string listing directories separated by 'os.pathsep'; defaults to
+        os.environ['PATH'].  Returns the complete filename or None if not found.
+        """
+        if os.path.isfile(executable):
+            return executable
+
+        if path is None:
+            path = os.environ.get('PATH', os.defpath)
+
+        if not path:
+            return None
+
+        paths = path.split(os.pathsep)
+        base, ext = os.path.splitext(executable)
+
+        for p in paths:
+            f = os.path.join(p, executable)
+            if os.path.isfile(f):
+                # the file exists, we have a shot at spawn working
+                return f
+        return None
 
 # we want to keep zio as a zero-dependency single-file easy-to-use library, and even more, work across python2/python3 boundary
 # https://python-future.org/compatible_idioms.html#unicode-text-string-literals
