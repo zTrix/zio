@@ -496,7 +496,7 @@ class zio(object):
 
         self.debug = debug
 
-        if isinstance(timeout, int) and timeout > 0:
+        if isinstance(timeout, (int, float)) and timeout > 0:
             self.timeout = timeout
         else:
             self.timeout = 10
