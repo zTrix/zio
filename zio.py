@@ -638,6 +638,7 @@ class zio(object):
                 self.log_read(incoming)
 
     read_exact = read
+    recvn = read
 
     def read_to_end(self):
         '''
