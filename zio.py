@@ -757,6 +757,8 @@ class zio(object):
         '''
         tell wether we have some data to read
         '''
+        if len(self.buffer):
+            return True
         return select_ignoring_useless_signal([self.io.rfd], [], [], 0) == ([self.io.rfd], [], [])
 
     def write(self, byte_buf):
