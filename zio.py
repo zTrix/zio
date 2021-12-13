@@ -88,7 +88,6 @@ except ImportError: # some stupid ubuntu
             return None
 
         paths = path.split(os.pathsep)
-        base, ext = os.path.splitext(executable)
 
         for p in paths:
             f = os.path.join(p, executable)
@@ -927,7 +926,7 @@ class zio(object):
     def __str__(self):
         return '<zio target=%s, timeout=%s, io=%s, buffer=%s>' % (self.target, self.timeout, str(self.io), self.buffer)
 
-class SocketIO:
+class SocketIO(object):
     mode = 'socket'
 
     def __init__(self, target, timeout=None, debug=None):
@@ -1119,7 +1118,7 @@ class SocketIO:
     def __repr__(self):
         return repr(self.sock)
 
-class ProcessIO:
+class ProcessIO(object):
     mode = 'process'
 
     def __init__(self, target, timeout=None, debug=None, stdin=PIPE, stdout=TTY_RAW, cwd=None, env=None, sighup=None, write_delay=None, read_echoback=True):
