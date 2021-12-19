@@ -113,6 +113,75 @@ io = zio(ssl_sock)
 ...
 ```
 
+### tell between promptless shell and io EOF
+
+```
+# ... after your awesome exploit, you are waiting for shell but this is chance to fail
+# so detect EOF first
+io.read_until_timeout(1)
+
+if io.is_eof_seen():
+    print('remote closed')
+    exit(10)
+else:
+    io.writeline('\necho ____; /readflag ; echo ____; exit\n')
+    if b'____' in io.read():
+        exit(0)
+```
+
+### Exploit Template
+
+```
+#!/usr/bin/env python3
+
+import os
+from zio import *
+
+LOCAL = True
+target = './vuln.patched'
+
+if os.getenv('TARGET'):
+    ary = os.getenv('TARGET').split(':')
+    target = (ary[0], int(ary[1]))
+    LOCAL = False
+
+print('target = %r' % (target, ))
+io = zio(target, print_read=COLORED(REPR, 'yellow'), print_write=COLORED(REPR, 'cyan'), timeout=10000)
+
+if LOCAL:
+    io.gdb_hint(breakpoints=[
+        0x555555555314,     # before exit 0
+    ])
+else:
+    # do proof of work?
+    # io.readline()
+    # input('continue?')
+    pass
+
+io.read_until(b'some banner')
+io.writeline(b'your awesome exploit')
+
+if LOCAL:
+    # input('continue?')
+
+    # from IPython import embed
+    # embed()
+    pass
+
+# detect shell or EOF
+io.read_until_timeout(1)
+
+if io.is_eof_seen():
+    exit(10)
+
+io.writeline('\necho ____; /readflag ; echo ____\n')
+
+if b'____' in io.read():
+    exit(0)
+else:
+    exit(10)
+```
+
 ### Play with cmdline
 
 Act like netcat
