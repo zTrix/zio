@@ -938,6 +938,8 @@ class SocketIO(object):
         else:
             self.sock = socket.create_connection(target, self.timeout)
 
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
         self.eof_seen = False
         self.eof_sent = False
         self.exit_code = None
