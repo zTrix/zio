@@ -979,6 +979,7 @@ class SocketIO(object):
 
     def send(self, buf):
         try:
+            if self.debug: write_debug(self.debug, b'SocketIO.send(%r) -> %r' % (len(buf), buf))
             return self.sock.sendall(buf)
         except Exception as ex:
             self.exit_code = 2    # send exception
