@@ -935,6 +935,7 @@ class SocketIO(object):
 
         if isinstance(target, socket.socket):
             self.sock = target
+            self.sock.settimeout(self.timeout)
         else:
             self.sock = socket.create_connection(target, self.timeout)
 
