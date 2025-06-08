@@ -322,7 +322,7 @@ class ZIOTestCase(unittest.TestCase):
             self.assertEqual(io.exit_status(), 0)
 
     def test_xxd(self):
-        for io in exec_cmdline('xxd', print_write=COLORED(REPR), print_read=COLORED(RAW, 'yellow'), socat_exec=''):
+        for io in exec_cmdline('env NO_COLOR=1 xxd', print_write=COLORED(REPR), print_read=COLORED(RAW, 'yellow'), socat_exec=''):
             rainbow = bytes([x for x in range(0, 256)])
             io.write_line(rainbow)
             io.send_eof()
