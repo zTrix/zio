@@ -42,10 +42,11 @@
 from __future__ import print_function
 from __future__ import division
 
-__version__ = "2.1.3"
+__version__ = "2.2.0"
 __project__ = "https://github.com/zTrix/zio"
 
 import os
+import io
 import sys
 import re
 import struct
@@ -526,7 +527,9 @@ class zio(object):
         else:
             self.timeout = 10
 
-        if is_hostport_tuple(self.target) or isinstance(self.target, socket.socket):
+        if isinstance(self.target, int) or isinstance(self.target, io.FileIO):
+            self.io = FdIO(self.target, timeout=self.timeout, debug=debug)
+        elif is_hostport_tuple(self.target) or isinstance(self.target, socket.socket):
             self.io = SocketIO(self.target, timeout=self.timeout, debug=debug)
         else:
             self.io = ProcessIO(self.target, timeout=self.timeout, debug=debug,
@@ -925,6 +928,149 @@ class zio(object):
 
     def __str__(self):
         return '<zio target=%s, timeout=%s, io=%s, buffer=%s>' % (self.target, self.timeout, str(self.io), self.buffer)
+
+
+class FdIO(object):
+    mode = 'fd'
+
+    def __init__(self, target, timeout=None, debug=None):
+        self.timeout = timeout
+        self.debug = debug
+
+        if isinstance(target, int):
+            self.fd = target
+            self.fh = os.fdopen(self.fd, "w+b", buffering=0)
+        else:
+            self.fd = target.fileno()
+            self.fh = target
+
+        self.eof_seen = False
+        self.eof_sent = False
+        self.exit_code = None
+
+    @property
+    def rfd(self):
+        return self.fd
+
+    @property
+    def wfd(self):
+        return self.fd
+
+    def recv(self, size=None):
+        '''
+        recv 1 or more available bytes then return
+        return None to indicate EOF
+        since we use b'' to indicate empty string in case of timeout, so do not return b'' for EOF
+        '''
+        if size is None:    # socket.recv does not allow None or -1 as argument
+            size = 8192
+
+        try:
+            b = self.fh.read(size)
+            if self.debug: write_debug(self.debug, b'FdIO.recv(%r) -> %r' % (size, b))
+            if not b:
+                self.eof_seen = True
+                return None
+            return b
+        except Exception as ex:
+            self.exit_code = 1    # recv exception
+            if self.debug: write_debug(self.debug, b'FdIO.recv(%r) exception: %r' % (size, ex))
+            raise
+
+    def send(self, buf):
+        try:
+            if self.debug: write_debug(self.debug, b'FdIO.send(%r) -> %r' % (len(buf), buf))
+            ret = self.fh.write(buf)
+            self.fh.flush()
+            return ret
+        except Exception as ex:
+            self.exit_code = 2    # send exception
+            if self.debug: write_debug(self.debug, b'FdIO.send(%r) exception: %r' % (buf, ex))
+            raise
+
+    def send_eof(self):
+        self.eof_sent = True
+        if self.debug: write_debug(self.debug, b'FdIO.send_eof()')
+        # FIXME: implement send_eof for fd io?
+
+    def interact(self, buffered=None, read_transform=None, write_transform=None, show_input=None, show_output=None, raw_mode=False):
+        if show_input is None:
+            show_input = not os.isatty(pty.STDIN_FILENO)    # if pty, itself will echo; if pipe, we do echo
+        if show_output is None:
+            show_output = True
+
+        parent_tty_mode = None
+        if os.isatty(pty.STDIN_FILENO) and raw_mode:
+            parent_tty_mode = tty.tcgetattr(pty.STDIN_FILENO)   # save mode and restore after interact
+            ttyraw(pty.STDIN_FILENO)                            # set to raw mode to pass all input thru, supporting remote apps as htop/vim
+
+        if buffered is not None:
+            if read_transform is not None:
+                buffered = read_transform(buffered)
+            if show_output:
+                write_stdout(buffered)
+
+        while not self.is_closed():
+            try:
+                r, _w, _e = select_ignoring_useless_signal([self.rfd, pty.STDIN_FILENO], [], [])
+            except KeyboardInterrupt:
+                break
+            data = None
+            if self.rfd in r:
+                data = self.recv(1024)
+                if data:
+                    if read_transform is not None:
+                        data = read_transform(data)
+                    if show_output:
+                        write_stdout(data)
+                else:       # EOF
+                    self.eof_seen = True
+                    break
+            if pty.STDIN_FILENO in r:
+                try:
+                    data = os.read(pty.STDIN_FILENO, 1024)
+                except OSError as e:
+                    # the subprocess may have closed before we get to reading it
+                    if e.errno != errno.EIO:
+                        raise
+                if data:
+                    if write_transform:
+                        data = write_transform(data)
+                    if show_input:
+                        write_stdout(data)
+                    self.send(data)
+
+        if parent_tty_mode:
+            tty.tcsetattr(pty.STDIN_FILENO, tty.TCSAFLUSH, parent_tty_mode)
+
+    def close(self):
+        self.eof_seen = True
+        self.eof_sent = True
+        try:
+            self.fh.close()
+            if self.exit_code is None:
+                self.exit_code = 0
+        except Exception as ex:
+            self.exit_code = 3    # close exception
+            if self.debug: write_debug(self.debug, b'FdIO.close() exception: %r' % ex)
+            raise
+
+    def is_closed(self):
+        return self.fh.closed
+
+    @property
+    def exit_status(self):
+        return self.exit_code
+
+    def target_pid(self):
+        raise NotImplementedError
+
+    def __str__(self):
+        return '<FdIO self.fd=%s>' % (self.fd)
+
+    def __repr__(self):
+        return self.__str__()
+
 
 class SocketIO(object):
     mode = 'socket'
